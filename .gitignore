@@ -140,3 +140,8 @@ dist
 .DS_Store
 Thumbs.db
 music.db
+.trae/documents/discord-bot-prd.md
+.trae/documents/discord-bot-technical-architecture.md
+.trae/documents/Perbaiki Impor, Config, dan Skema DB EyeDaemon.md
+src/bot/data/database.db
+src/bot/data/music.db

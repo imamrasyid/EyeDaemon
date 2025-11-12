@@ -6,7 +6,7 @@ try {
     Routes = require("@discordjs/rest").Routes;
 }
 
-const { token } = require("../config");
+const { DISCORD_BOT_TOKEN } = require("../config");
 
 // daftar definisi slash command
 const commands = [
@@ -138,7 +138,7 @@ async function registerCommands(client) {
         const appId = client.application?.id || client.user?.id;
         if (!appId) throw new Error("Application ID belum siap.");
 
-        const rest = new REST({ version: "10" }).setToken(token);
+        const rest = new REST({ version: "10" }).setToken(DISCORD_BOT_TOKEN);
 
         await rest.put(Routes.applicationCommands(appId), { body: commands });
         console.log(`✅ Slash commands registered globally`);

@@ -1,13 +1,20 @@
 {
   "name": "eyedaemon",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Feature-rich Discord bot with music, moderation, economy, leveling, and more",
+  "main": "src/bot/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node src/bot/index.js",
+    "dev": "nodemon src/bot/index.js",
+    "bot": "node src/bot/index.js",
+    "server": "node src/server/server.js",
+    "build": "echo \"No build step required for Node.js\"",
+    "lint": "echo \"No linter configured\"",
+    "logs": "tail -f logs/bot.log"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["discord", "bot", "music", "moderation", "economy", "leveling", "discord.js"],
+  "author": "EyeDaemon Team",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {

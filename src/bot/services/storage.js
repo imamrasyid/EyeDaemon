@@ -1,8 +1,8 @@
 const Database = require("better-sqlite3");
 const path = require("path");
-const { dbPath } = require("../config");
+const CONFIG = require("../config");
 
-const db = new Database(path.resolve(dbPath));
+const db = new Database(path.resolve(CONFIG.DISCORD.CACHE_PATH));
 db.exec(`CREATE TABLE IF NOT EXISTS queues (
   guild_id TEXT PRIMARY KEY,
   queue_json TEXT NOT NULL,

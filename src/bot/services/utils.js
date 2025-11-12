@@ -48,12 +48,4 @@ async function sendMsg(ctx, content) {
     }
 }
 
-// function progressBar(current, total, size = 20) {
-//     const ratio = Math.min(current / total, 1);
-//     const filled = Math.round(ratio * size);
-//     const empty = size - filled;
-//     return `\`${"▬".repeat(filled)}🔘${"▬".repeat(empty)}\`\n(${msToTime(current)} / ${msToTime(total)})`;
-// }
-
-
 module.exports = { formatMs, parseTimeToMs, progressBar, msToTime, sendMsg };

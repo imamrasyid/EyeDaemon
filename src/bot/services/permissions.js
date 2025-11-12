@@ -1,13 +1,13 @@
-const { allowedChannels, djRole } = require("../config");
+const { DISCORD_MUSIC_CHANNELS, DISCORD_DJ_ROLE } = require("../config");
 
 function checkChannel(message) {
-    if (!allowedChannels.length) return true;
-    return allowedChannels.includes(message.channel.id);
+    if (!DISCORD_MUSIC_CHANNELS.length) return true;
+    return DISCORD_MUSIC_CHANNELS.includes(message.channel.id);
 }
 
 function requireDJ(member) {
-    if (!djRole) return true;
-    return member.roles.cache.some(r => r.name === djRole);
+    if (!DISCORD_DJ_ROLE) return true;
+    return member.roles.cache.some(r => r.name === DISCORD_DJ_ROLE);
 }
 
 module.exports = { checkChannel, requireDJ };

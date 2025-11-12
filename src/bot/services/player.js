@@ -1,29 +1,42 @@
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, NoSubscriberBehavior } = require("@discordjs/voice");
 const { EmbedBuilder } = require("discord.js");
 const fetch = (...a) => import("node-fetch").then(({ default: f }) => f(...a));
-const { eyeBase, progressBarSize } = require("../config");
+const CONFIG = require("../config");
 const { formatMs, progressBar } = require("./utils");
 const { saveQueue, loadQueue, deleteQueue } = require("./storage");
 
-const states = new Map(); // gid -> {connection, player, queue, now, volume, loop, filter, idleTimer}
+const states = new Map();
 
-/** Hitung idle timeout fleksibel berbasis durasi lagu terakhir */
 function computeIdleTimeoutMs(track) {
     const dur = track?.durationMs || 0;
-    if (dur >= 15 * 60_000) return 10 * 60_000; // >15 menit => 10 menit
-    if (dur >= 5 * 60_000) return 8 * 60_000; // 5–15 menit => 8 menit
-    return 5 * 60_000;                           // <5 menit => 5 menit
+    if (dur >= 15 * 60_000) return 10 * 60_000;
+    if (dur >= 5 * 60_000) return 8 * 60_000;
+    return 5 * 60_000;
 }
 
 function getState(gid) {
     if (!states.has(gid)) {
-        const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
-        states.set(gid, { connection: null, player, queue: [], now: null, volume: 0.8, loop: "off", filter: "none", idleTimer: null });
+        const player = createAudioPlayer({
+            debug: true,
+            behaviors: {
+                maxMissedFrames: 100,
+                noSubscriber: NoSubscriberBehavior.Pause
+            }
+        });
+        states.set(gid, {
+            connection: null,
+            player,
+            queue: [],
+            now: null,
+            volume: 0.8,
+            loop: "off",
+            filter: "none",
+            idleTimer: null
+        });
     }
     return states.get(gid);
 }
 
-/** Dipanggil oleh voiceState.js saat channel kosong, atau bisa dipakai manual */
 function scheduleIdleCleanup(gid, textChannel, basisTrack) {
     const s = getState(gid);
     if (s.idleTimer) clearTimeout(s.idleTimer);
@@ -37,27 +50,37 @@ function scheduleIdleCleanup(gid, textChannel, basisTrack) {
         s.now = null;
         s.queue = [];
         saveQueue(gid, s);
-        deleteQueue(gid); // bersihkan dari SQLite supaya benar2 idle
-        try { await textChannel?.send?.("💤 Tidak ada aktivitas, bot keluar otomatis."); } catch { }
+        deleteQueue(gid);
+        try {
+            await textChannel?.send?.("💤 Tidak ada aktivitas, bot keluar otomatis.");
+        }
+        catch { }
         console.log(`🧹 Auto-cleanup idle guild ${gid}`);
     }, timeout);
 }
 
 async function ensureConnection(message) {
     const ch = message.member?.voice?.channel;
-    if (!ch) throw new Error("❌ Kamu harus join voice channel dulu!");
+    if (!ch) {
+        await message.reply("❌ Kamu harus join voice channel dulu!");
+        throw new Error("❌ Kamu harus join voice channel dulu!");
+    }
     const s = getState(message.guild.id);
     if (s.connection) return s.connection;
-    s.connection = joinVoiceChannel({ channelId: ch.id, guildId: message.guild.id, adapterCreator: message.guild.voiceAdapterCreator });
+    s.connection = joinVoiceChannel({
+        channelId: ch.id,
+        guildId: message.guild.id,
+        adapterCreator: message.guild.voiceAdapterCreator
+    });
     return s.connection;
 }
 
-async function eyeInfo(query) {
-    const r = await fetch(`${eyeBase}/info?query=${encodeURIComponent(query)}`);
+async function AudioMetaData(query) {
+    const r = await fetch(`${CONFIG.AUDIO.SOURCE_ENDPOINT}/info?query=${encodeURIComponent(query)}`);
     if (!r.ok) throw new Error(`INFO failed: ${r.status} ${r.statusText}`);
     const j = await r.json();
     if (!j.success) throw new Error(j.error || "info error");
-    return j; // { title, url, durationSec, thumbnail }
+    return j;
 }
 
 async function play(ctx, query) {
@@ -70,7 +93,7 @@ async function play(ctx, query) {
     const user = ctx.author || ctx.user || ctx.member?.user;
     if (!user) throw new Error("Tidak dapat mendeteksi pengguna yang meminta lagu.");
 
-    const meta = await eyeInfo(query);
+    const meta = await AudioMetaData(query);
     const track = {
         title: meta.title,
         url: meta.url,
@@ -101,8 +124,7 @@ async function startNext(gid, textChannel, forcedStartMs = 0) {
     if (!s.connection || !s.connection.joinConfig?.channelId) {
         try {
             const guild = textChannel.guild;
-            const vc = textChannel.guild.members.me?.voice?.channel
-                || textChannel.guild.members.cache.get(textChannel.client.user.id)?.voice?.channel;
+            const vc = textChannel.guild.members.me?.voice?.channel || textChannel.guild.members.cache.get(textChannel.client.user.id)?.voice?.channel;
 
             if (!vc) {
                 await textChannel.send("⚠️ Tidak ada voice channel aktif. Gunakan `!play` lagi.");
@@ -130,25 +152,20 @@ async function startNext(gid, textChannel, forcedStartMs = 0) {
             try { s.connection.destroy(); } catch { }
             s.connection = null;
         }
-        try {
-            if (textChannel) await textChannel.send("✅ Tidak ada lagi lagu di antrian.");
-        } catch { }
-        if (textChannel?.client?.user) {
-            textChannel.client.user.setPresence({
-                activities: [{ name: "☕ ditemani playlist | 🎧", type: 2 }],
-                status: "idle",
-            });
-        }
-        // Tidak set idleTimer di sini (karena sudah left). voice idle diurus voiceState.js
+        // try {
+        //     if (textChannel) await textChannel.send("✅ Tidak ada lagi lagu di antrian.");
+        // } catch { }
+        // if (textChannel?.client?.user) {
+        //     textChannel.client.user.setPresence({
+        //         activities: [{ name: "EYEDAEMON", type: 2 }],
+        //         status: "idle",
+        //     });
+        // }
         return;
     }
 
     // === Stream & play ===
-    const streamUrl = `${eyeBase}/stream?query=${encodeURIComponent(
-        head.query
-    )}&start=${Math.floor(forcedStartMs / 1000)}&filter=${encodeURIComponent(
-        s.filter
-    )}`;
+    const streamUrl = `${CONFIG.AUDIO.SOURCE_ENDPOINT}/stream?query=${encodeURIComponent(head.query)}&start=${Math.floor(forcedStartMs / 1000)}&filter=${encodeURIComponent(s.filter)}`;
     const resp = await fetch(streamUrl);
     if (!resp.ok || !resp.body) {
         await textChannel.send(`⚠️ Gagal memutar: **${head.title}**`);
@@ -171,18 +188,31 @@ async function startNext(gid, textChannel, forcedStartMs = 0) {
     saveQueue(gid, s);
 
     // === Embed klasik ===
-    const embed = new EmbedBuilder()
-        .setColor(0x00b894)
-        .setTitle("🎶 Now Playing")
-        .setDescription(`[${head.title}](${head.url})`)
-        .addFields(
-            { name: "Durasi", value: head.durationMs ? formatMs(head.durationMs) : "—", inline: true },
-            { name: "Diminta oleh", value: `<@${head.requestedBy.id}>`, inline: true },
-            { name: "Volume", value: `${Math.round(s.volume * 100)}%`, inline: true },
-            { name: "Loop", value: s.loop, inline: true },
-            { name: "Filter", value: s.filter || "none", inline: true },
-            { name: "Antrian", value: `${s.queue.length} lagu`, inline: true }
-        );
+    const embed = new EmbedBuilder().setColor(0x00b894).setTitle("🎶 Now Playing").setDescription(`[${head.title}](${head.url})`).addFields({
+        name: "Durasi",
+        value: head.durationMs ? formatMs(head.durationMs) : "—",
+        inline: true
+    }, {
+        name: "Diminta oleh",
+        value: `<@${head.requestedBy.id}>`,
+        inline: true
+    }, {
+        name: "Volume",
+        value: `${Math.round(s.volume * 100)}%`,
+        inline: true
+    }, {
+        name: "Loop",
+        value: s.loop,
+        inline: true
+    }, {
+        name: "Filter",
+        value: s.filter || "none",
+        inline: true
+    }, {
+        name: "Antrian",
+        value: `${s.queue.length} lagu`,
+        inline: true
+    });
     if (head.thumb) embed.setThumbnail(head.thumb);
     await textChannel.send({ embeds: [embed] });
 
@@ -375,7 +405,7 @@ async function restoreForGuild(gid, channelFetcher) {
 }
 
 module.exports = {
-    getState, ensureConnection, eyeInfo, play, startNext,
+    getState, ensureConnection, AudioMetaData, play, startNext,
     showQueue, skip, stopAll, leave, pause, resume, setVolume, toggleLoop, shuffle,
     removeIdx, moveIdx, clearTail, nowPlaying, seekTo, setFilter, restoreForGuild,
     scheduleIdleCleanup, // ← diekspor untuk voiceState (opsional)
