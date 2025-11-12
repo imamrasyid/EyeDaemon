@@ -32,4 +32,23 @@ module.exports = class RemoveCommand extends BaseCommand {
             await message.reply("❌ Terjadi kesalahan saat menghapus lagu dari antrian.");
         }
     }
+
+    async slash(interaction) {
+        try {
+            const guild = interaction.guild;
+            if (!guild) return interaction.reply("⚠️ Tidak dalam server yang valid.");
+
+            const index = interaction.options.getInteger("index", true);
+            const { getState } = require("../../services/player");
+            const s = getState(guild.id);
+            if (!s.queue.length) return interaction.reply("⚠️ Antrian kosong.");
+            if (index > s.queue.length || index < 1) return interaction.reply(`⚠️ Index tidak valid (1..${s.queue.length}).`);
+
+            const removed = s.queue.splice(index - 1, 1)[0];
+            await interaction.reply(`🗑️ Berhasil menghapus **${removed.title}** dari antrian.`);
+        } catch (err) {
+            console.error("remove() error:", err);
+            await interaction.reply("❌ Terjadi kesalahan saat menghapus lagu dari antrian.");
+        }
+    }
 };

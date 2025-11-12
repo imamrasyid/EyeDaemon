@@ -33,4 +33,26 @@ module.exports = class JumpCommand extends BaseCommand {
             await message.reply("❌ Terjadi kesalahan saat melompat ke lagu.");
         }
     }
+
+    async slash(interaction) {
+        try {
+            const guild = interaction.guild;
+            if (!guild) return interaction.reply("⚠️ Tidak dalam server yang valid.");
+
+            const { getState } = require("../../services/player");
+            const s = getState(guild.id);
+            const index = interaction.options.getInteger("index", true);
+
+            if (!s.queue[index]) return interaction.reply("⚠️ Index tidak valid.");
+
+            const [t] = s.queue.splice(index, 1);
+            s.queue.unshift(t);
+            s.player.stop();
+
+            await interaction.reply(`⏩ Lompat ke: **${t.title}**`);
+        } catch (err) {
+            console.error("jump() error:", err);
+            await interaction.reply("❌ Terjadi kesalahan saat melompat ke lagu.");
+        }
+    }
 };

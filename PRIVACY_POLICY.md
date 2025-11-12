@@ -8,8 +8,8 @@ _Modern, transparent & user-first_
 
 <div align="center">
 
-[![Last Updated](https://img.shields.io/badge/Last%20Updated-10%20November%202025-00c9ff?style=flat-square)](https://github.com/your-repo)
-[![Bot](https://img.shields.io/badge/Bot-EyeDaemon%20Discord%20Music%20Bot-5865f2?style=flat-square)](https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID)
+[![Last Updated](https://img.shields.io/badge/Last%20Updated-10%20November%202025-00c9ff?style=flat-square)](https://github.com/imamrasyid/EyeDaemon)
+[![Bot](https://img.shields.io/badge/Bot-EyeDaemon%20Discord%20Music%20Bot-5865f2?style=flat-square)](https://discord.com/oauth2/authorize?client_id=1372457514637066332)
 
 </div>
 
@@ -69,7 +69,7 @@ If you’re younger, please **do not use** EyeDaemon.
 <summary><h3>📣 Updates to This Policy</h3></summary>
 
 We may tweak this page from time to time.  
-Major changes will be announced in our [Discord support server](https://discord.gg/YOUR_INVITE) and pinned in the repo’s [releases](https://github.com/your-repo/releases).
+Major changes will be announced in our [Discord support server](https://discord.gg/YOUR_INVITE) and pinned in the repo’s [releases](https://github.com/imamrasyid/EyeDaemon/releases).
 
 </details>
 
@@ -79,7 +79,7 @@ Major changes will be announced in our [Discord support server](https://discord.
 
 ## 📬 Still have questions?
 
-[![Email](https://img.shields.io/badge/darkblowpb@gmail.com-D14836?style=flat-square&logo=gmail&logoColor=white)](mailto:darkblowpb@gmail.com)
-[![Website](https://img.shields.io/badge/Website-Coming%20Soon-1f8eed?style=flat-square&logo=google-chrome)](https://your-website.com)
+[![Email](https://img.shields.io/badge/imamrasyidw@gmail.com-D14836?style=flat-square&logo=gmail&logoColor=white)](mailto:imamrasyidw@gmail.com)
+[![Website](https://img.shields.io/badge/Website-Coming%20Soon-1f8eed?style=flat-square&logo=google-chrome)](https://imamrasyid.github.io/EyeDaemon/)
 
 </div>

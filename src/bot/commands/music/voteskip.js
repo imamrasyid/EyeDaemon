@@ -44,4 +44,35 @@ module.exports = class VoteSkipCommand extends BaseCommand {
             await message.reply("❌ Terjadi kesalahan saat melakukan vote skip.");
         }
     }
+
+    async slash(interaction) {
+        try {
+            const guild = interaction.guild;
+            if (!guild) return interaction.reply("⚠️ Tidak dalam server yang valid.");
+
+            const vc = interaction.member.voice.channel;
+            if (!vc) return interaction.reply("⚠️ Join voice channel dulu.");
+
+            const gid = guild.id;
+            const set = votes.get(gid) || new Set();
+            const userId = interaction.user.id;
+            set.add(userId);
+            votes.set(gid, set);
+
+            const members = vc.members.filter(m => !m.user.bot);
+            const ratio = set.size / members.size;
+
+            if (ratio >= 0.5) {
+                const { skip } = require("../../services/player");
+                skip(interaction);
+                votes.delete(gid);
+                return interaction.reply("⏭️ Vote skip berhasil!");
+            }
+
+            await interaction.reply(`🗳️ Vote skip: ${set.size}/${members.size} (${Math.floor(ratio * 100)}%)`);
+        } catch (err) {
+            console.error("executeVoteSkip() error:", err);
+            await interaction.reply("❌ Terjadi kesalahan saat melakukan vote skip.");
+        }
+    }
 };

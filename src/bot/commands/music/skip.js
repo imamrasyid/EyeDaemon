@@ -24,4 +24,17 @@ module.exports = class SkipCommand extends BaseCommand {
             await message.reply("❌ Terjadi kesalahan saat menskip lagu.");
         }
     }
+
+    async slash(interaction) {
+        try {
+            const guild = interaction.guild;
+            if (!guild) return interaction.reply("⚠️ Tidak dalam server yang valid.");
+            const { skip } = require("../../services/player");
+            skip(interaction);
+            await interaction.reply("⏭️ Lagu telah diskip.");
+        } catch (err) {
+            console.error("skip() error:", err);
+            await interaction.reply("❌ Terjadi kesalahan saat menskip lagu.");
+        }
+    }
 };

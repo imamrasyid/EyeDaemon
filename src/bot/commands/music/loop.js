@@ -25,4 +25,16 @@ module.exports = class LoopCommand extends BaseCommand {
             await message.reply("❌ Terjadi kesalahan saat mengubah mode loop.");
         }
     }
+
+    async slash(interaction) {
+        try {
+            const mode = interaction.options.getString("mode", true);
+            const { toggleLoop } = require("../../services/player");
+            toggleLoop(interaction, mode);
+            await interaction.reply("🔁 OK");
+        } catch (err) {
+            console.error("loop() error:", err);
+            await interaction.reply("❌ Terjadi kesalahan saat mengubah mode loop.");
+        }
+    }
 };

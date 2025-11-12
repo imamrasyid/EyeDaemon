@@ -22,4 +22,15 @@ module.exports = class PauseCommand extends BaseCommand {
             await message.reply("❌ Terjadi kesalahan saat menjeda pemutaran.");
         }
     }
+
+    async slash(interaction) {
+        try {
+            const { pause } = require("../../services/player");
+            pause(interaction);
+            await interaction.reply("⏸️");
+        } catch (err) {
+            console.error("pause() error:", err);
+            await interaction.reply("❌ Terjadi kesalahan saat menjeda pemutaran.");
+        }
+    }
 };

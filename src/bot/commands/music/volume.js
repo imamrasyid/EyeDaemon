@@ -31,4 +31,24 @@ module.exports = class VolumeCommand extends BaseCommand {
             await message.reply("❌ Terjadi kesalahan saat mengatur volume.");
         }
     }
+
+    async slash(interaction) {
+        try {
+            const guild = interaction.guild;
+            if (!guild) return interaction.reply("⚠️ Tidak dalam server yang valid.");
+
+            const value = interaction.options.getInteger("value", true);
+            const num = Number(value);
+            if (isNaN(num) || num < 0 || num > 200) {
+                return interaction.reply("⚠️ Volume harus angka antara 0-200.");
+            }
+
+            const { setVolume } = require("../../services/player");
+            setVolume(interaction, num);
+            await interaction.reply(`🔊 Volume diatur ke ${num}%`);
+        } catch (err) {
+            console.error("volume() error:", err);
+            await interaction.reply("❌ Terjadi kesalahan saat mengatur volume.");
+        }
+    }
 };

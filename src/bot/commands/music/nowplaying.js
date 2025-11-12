@@ -23,4 +23,14 @@ module.exports = class NowPlayingCommand extends BaseCommand {
             await message.reply("❌ Terjadi kesalahan saat menampilkan informasi lagu.");
         }
     }
+
+    async slash(interaction) {
+        try {
+            await nowPlaying(interaction);
+            await interaction.reply("✅");
+        } catch (err) {
+            console.error("nowplaying() error:", err);
+            await interaction.reply("❌ Terjadi kesalahan saat menampilkan informasi lagu.");
+        }
+    }
 };

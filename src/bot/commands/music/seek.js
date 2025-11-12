@@ -25,5 +25,23 @@ module.exports = class SeekCommand extends BaseCommand {
     if (!ms || ms < 0) return message.reply(this.formatError('Format waktu tidak valid.')); 
     await seekTo(message, ms);
   }
+
+  async slash(interaction) {
+    try {
+      const arg = interaction.options.getString("time", true);
+      let ms = 0;
+      if (/^\d+$/.test(arg)) ms = parseInt(arg) * 1000;
+      else {
+        const parts = arg.split(':').map(x => parseInt(x));
+        if (parts.length === 2 && parts.every(Number.isFinite)) ms = (parts[0] * 60 + parts[1]) * 1000;
+      }
+      if (!ms || ms < 0) return interaction.reply(this.formatError('Format waktu tidak valid.'));
+      await seekTo(interaction, ms);
+      await interaction.reply("⏩");
+    } catch (err) {
+      console.error("seek() error:", err);
+      await interaction.reply("❌ Terjadi kesalahan saat melakukan seek.");
+    }
+  }
 };
 

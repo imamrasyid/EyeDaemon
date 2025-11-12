@@ -267,6 +267,137 @@ class CommandHandler {
   }
 
   /**
+   * Handle slash command interaction
+   * @param {import('discord.js').CommandInteraction} interaction
+   */
+  async handleSlashCommand(interaction) {
+    if (!this.enabled) return;
+    const commandName = interaction.commandName?.toLowerCase();
+    const command = this.findCommand(commandName);
+    if (!command) return;
+
+    const userId = interaction.user.id;
+    const start = process.hrtime.bigint();
+
+    try {
+      // Cooldown
+      if (this.isOnCooldown(command.name, userId)) {
+        const remaining = this.getCooldownRemaining(command.name, userId);
+        this.rateLimitLogger.hit(userId, command.name, Date.now() + remaining);
+        if (interaction.isRepliable()) {
+          await interaction.reply({
+            embeds: [{
+              color: 0xffa500,
+              title: '⏰ Cooldown',
+              description: `Tunggu ${Math.ceil(remaining / 1000)} detik sebelum pakai lagi.`,
+              timestamp: new Date()
+            }],
+            ephemeral: true
+          });
+        }
+        return;
+      }
+
+      // Validasi dasar
+      if (!command.enabled) {
+        if (interaction.isRepliable()) {
+          await interaction.reply(command.formatError('Command sedang dinonaktifkan'));
+        }
+        return;
+      }
+
+      if (command.guildOnly && !interaction.guild) {
+        if (interaction.isRepliable()) {
+          await interaction.reply(command.formatError('Command hanya dapat digunakan di server'));
+        }
+        return;
+      }
+
+      if (command.ownerOnly) {
+        if (interaction.isRepliable()) {
+          await interaction.reply(command.formatError('Command khusus pemilik bot'));
+        }
+        return;
+      }
+
+      if (interaction.guild) {
+        if (command.permissions && command.permissions.length > 0) {
+          const missing = command.permissions.filter(p => !interaction.memberPermissions?.has(p));
+          if (missing.length > 0) {
+            await interaction.reply(command.formatError(`Kamu butuh izin: ${missing.join(', ')}`));
+            return;
+          }
+        }
+
+        if (command.botPermissions && command.botPermissions.length > 0) {
+          const me = interaction.guild.members.me;
+          const missingBot = command.botPermissions.filter(p => !me?.permissions.has(p));
+          if (missingBot.length > 0) {
+            await interaction.reply(command.formatError(`Bot butuh izin: ${missingBot.join(', ')}`));
+            return;
+          }
+        }
+      }
+
+      this.updateCommandStats(command.name, 'executed');
+      this.applyCooldown(command.name, userId);
+
+      if (typeof command.slash === 'function') {
+        await command.slash(interaction);
+      } else {
+        await interaction.reply({
+          embeds: [{
+            color: 0xffa500,
+            title: 'ℹ️ Tidak tersedia',
+            description: 'Slash untuk command ini belum diimplementasikan.',
+            timestamp: new Date()
+          }],
+          ephemeral: true
+        });
+      }
+
+      this.updateCommandStats(command.name, 'success');
+      logger.info(`Slash command executed: ${command.name} by ${interaction.user.tag}`);
+    } catch (error) {
+      this.updateCommandStats(command.name, 'error');
+      logger.error(`Slash command execution failed: ${command.name}`, {
+        error: error.message,
+        user: interaction.user.tag,
+        guild: interaction.guild?.name || 'DM'
+      });
+      try {
+        if (interaction.deferred || interaction.replied) {
+          await interaction.followUp({
+            embeds: [{
+              color: 0xff0000,
+              title: '❌ Command Error',
+              description: 'Terjadi kesalahan saat menjalankan command.',
+              timestamp: new Date()
+            }],
+            ephemeral: true
+          });
+        } else {
+          await interaction.reply({
+            embeds: [{
+              color: 0xff0000,
+              title: '❌ Command Error',
+              description: 'Terjadi kesalahan saat menjalankan command.',
+              timestamp: new Date()
+            }],
+            ephemeral: true
+          });
+        }
+      } catch (replyError) {
+        logger.error('Failed to send slash error message', { error: replyError.message });
+      }
+      this.client.emit('commandError', { command, interaction, error });
+    } finally {
+      const duration = Number(process.hrtime.bigint() - start) / 1000000;
+      this.updateCommandStats(command.name, 'duration', duration);
+    }
+  }
+
+  /**
    * Find command by name or alias
    * @param {string} name - Command name or alias
    * @returns {BaseCommand|null}

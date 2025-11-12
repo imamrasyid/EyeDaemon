@@ -22,4 +22,17 @@ module.exports = class ShuffleCommand extends BaseCommand {
             await message.reply("❌ Terjadi kesalahan saat mengacak antrian.");
         }
     }
+
+    async slash(interaction) {
+        try {
+            const guild = interaction.guild;
+            if (!guild) return interaction.reply("⚠️ Tidak dalam server yang valid.");
+            const { shuffle } = require("../../services/player");
+            shuffle(interaction);
+            await interaction.reply("🔀 Antrian lagu telah diacak.");
+        } catch (err) {
+            console.error("shuffle() error:", err);
+            await interaction.reply("❌ Terjadi kesalahan saat mengacak antrian.");
+        }
+    }
 };

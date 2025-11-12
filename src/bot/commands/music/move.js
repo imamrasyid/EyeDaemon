@@ -27,4 +27,20 @@ module.exports = class MoveCommand extends BaseCommand {
             await message.reply("❌ Terjadi kesalahan saat memindahkan lagu dalam antrian.");
         }
     }
+
+    async slash(interaction) {
+        try {
+            const guild = interaction.guild;
+            if (!guild) return interaction.reply("⚠️ Tidak dalam server yang valid.");
+            const from = interaction.options.getInteger("from", true);
+            const to = interaction.options.getInteger("to", true);
+            if (isNaN(from) || isNaN(to)) return interaction.reply("⚠️ Masukkan nomor antrian yang valid.");
+            const { moveIdx } = require("../../services/player");
+            await moveIdx(interaction, from, to);
+            await interaction.reply("↔️ OK");
+        } catch (err) {
+            console.error("executeMove() error:", err);
+            await interaction.reply("❌ Terjadi kesalahan saat memindahkan lagu dalam antrian.");
+        }
+    }
 };

@@ -26,4 +26,19 @@ module.exports = class ClearCommand extends BaseCommand {
             await message.reply("❌ Terjadi kesalahan saat membersihkan antrian.");
         }
     }
+
+    async slash(interaction) {
+        try {
+            const guild = interaction.guild;
+            if (!guild) return interaction.reply("⚠️ Tidak dalam server yang valid.");
+
+            const { clearTail } = require("../../services/player");
+            clearTail(interaction);
+
+            await interaction.reply("🧹 Antrian telah dibersihkan.");
+        } catch (err) {
+            console.error("clear() error:", err);
+            await interaction.reply("❌ Terjadi kesalahan saat membersihkan antrian.");
+        }
+    }
 };

@@ -24,4 +24,17 @@ module.exports = class QueueCommand extends BaseCommand {
             await message.reply("❌ Terjadi kesalahan saat menampilkan queue.");
         }
     }
+
+    async slash(interaction) {
+        try {
+            const guild = interaction.guild;
+            if (!guild) return interaction.reply("⚠️ Tidak dalam server yang valid.");
+            const { showQueue } = require("../../services/player");
+            await showQueue(interaction);
+            await interaction.reply("✅ Queue dikirim.");
+        } catch (err) {
+            console.error("queue() error:", err);
+            await interaction.reply("❌ Terjadi kesalahan saat menampilkan queue.");
+        }
+    }
 };

@@ -40,4 +40,18 @@ module.exports = class LeaveCommand extends BaseCommand {
             await message.reply("❌ Terjadi kesalahan saat keluar dari voice channel.");
         }
     }
+
+    async slash(interaction) {
+        try {
+            const guild = interaction.guild;
+            if (!guild) return interaction.reply("⚠️ Tidak dalam server yang valid.");
+
+            const { leave } = require("../../services/player");
+            await leave(interaction);
+            await interaction.reply("👋 Bot telah keluar dari voice channel dan menghentikan semua musik.");
+        } catch (err) {
+            console.error("leave() error:", err);
+            await interaction.reply("❌ Terjadi kesalahan saat keluar dari voice channel.");
+        }
+    }
 };

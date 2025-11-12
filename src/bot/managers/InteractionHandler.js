@@ -236,7 +236,7 @@ class InteractionHandler {
       return this.interactions.get(interaction.customId) || null;
     }
     
-    if (interaction.isSelectMenu()) {
+    if (typeof interaction.isSelectMenu === 'function' ? interaction.isSelectMenu() : interaction.isStringSelectMenu()) {
       return this.interactions.get(interaction.customId) || null;
     }
     

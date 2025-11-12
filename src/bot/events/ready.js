@@ -1,5 +1,6 @@
 const { BaseDiscordEvent } = require('../base/BaseEvent');
 const { events: logger } = require('../services/logging.service');
+const { registerCommands } = require('../interactions/register');
 
 /**
  * Ready event - Fired when the bot is ready
@@ -33,6 +34,8 @@ class ReadyEvent extends BaseDiscordEvent {
         users: this.client.users.cache.size,
         timestamp: new Date()
       });
+
+      await registerCommands(this.client);
 
     } catch (error) {
       logger.error('Error in ready event', { error: error.message });

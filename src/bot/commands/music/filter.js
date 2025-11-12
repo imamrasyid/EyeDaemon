@@ -25,4 +25,16 @@ module.exports = class FilterCommand extends BaseCommand {
             await message.reply("❌ Terjadi kesalahan saat menerapkan filter.");
         }
     }
+
+    async slash(interaction) {
+        try {
+            const preset = interaction.options.getString("preset", true);
+            const { setFilter } = require("../../services/player");
+            await setFilter(interaction, preset);
+            await interaction.reply(`🎚️ Filter **${preset}** diterapkan.`);
+        } catch (err) {
+            console.error("filter() error:", err);
+            await interaction.reply("❌ Terjadi kesalahan saat menerapkan filter.");
+        }
+    }
 };

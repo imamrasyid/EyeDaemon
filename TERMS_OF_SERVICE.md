@@ -6,7 +6,7 @@
 _Last updated: 10 November 2025_
 
 [🎧 Add to Server](https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot+applications.commands&permissions=36700160)  
-[📖 GitHub](https://github.com/your-org/EyeDaemon) · [💬 Support](https://discord.gg/your-invite) · [📧 Email](mailto:darkblowpb@gmail.com)
+[📖 GitHub](https://github.com/imamrasyid/EyeDaemon) · [💬 Support](https://discord.gg/your-invite) · [📧 Email](mailto:imamrasyidw@gmail.com)
 
 </div>
 
@@ -69,7 +69,7 @@ We are **not responsible** for:
 We can update, pause, or remove features at any time.  
 Major ToS changes will be announced via:
 
-1. GitHub [releases](https://github.com/your-org/EyeDaemon/releases)
+1. GitHub [releases](https://github.com/imamrasyid/EyeDaemon/releases)
 2. `#announcements` channel on our [support server](https://discord.gg/your-invite)
 
 ---
@@ -78,17 +78,17 @@ Major ToS changes will be announced via:
 
 Found a bug or have a legal question?
 
-| Channel    | Handle                                              |
-| ---------- | --------------------------------------------------- |
-| 📧 Email   | [darkblowpb@gmail.com](mailto:darkblowpb@gmail.com) |
-| 🌐 Website | _Coming soon_                                       |
-| 💬 Discord | [`@EyeDaemon`](https://discord.gg/your-invite)      |
+| Channel    | Handle                                                |
+| ---------- | ----------------------------------------------------- |
+| 📧 Email   | [imamrasyidw@gmail.com](mailto:imamrasyidw@gmail.com) |
+| 🌐 Website | _Coming soon_                                         |
+| 💬 Discord | [`@EyeDaemon`](https://discord.gg/your-invite)        |
 
 ---
 
 <div align="center">
 
 Made with ❤️ by the EyeDaemon team.  
-[⭐ Star us on GitHub](https://github.com/your-org/EyeDaemon) to show support!
+[⭐ Star us on GitHub](https://github.com/imamrasyid/EyeDaemon) to show support!
 
 </div>
