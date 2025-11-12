@@ -5,6 +5,7 @@ A feature-rich, all-in-one Discord bot designed to provide a complete server man
 ## 🌟 Features
 
 ### 🎵 Music System
+
 - **Multi-platform Support**: Play from YouTube, Spotify, SoundCloud
 - **Advanced Queue Management**: Add, remove, shuffle, loop tracks
 - **Audio Effects**: Bass boost, nightcore, karaoke mode
@@ -12,6 +13,7 @@ A feature-rich, all-in-one Discord bot designed to provide a complete server man
 - **Volume Control**: Precise volume adjustment with audio filters
 
 ### 🔨 Moderation Tools
+
 - **User Management**: Kick, ban, mute, timeout with custom durations
 - **Warning System**: Track warnings with auto-actions at thresholds
 - **Auto-moderation**: Spam detection, word filters, anti-link protection
@@ -19,6 +21,7 @@ A feature-rich, all-in-one Discord bot designed to provide a complete server man
 - **Server Protection**: Anti-raid, verification systems
 
 ### 💰 Economy System
+
 - **Currency Management**: Server currency with balance tracking
 - **Gambling Games**: Slots, coinflip, blackjack, roulette
 - **Virtual Shop**: Buy roles, colors, badges, and custom items
@@ -26,6 +29,7 @@ A feature-rich, all-in-one Discord bot designed to provide a complete server man
 - **Work System**: Earn currency through various jobs
 
 ### 📈 Leveling & XP
+
 - **Automatic XP**: Gain XP from chatting and voice activity
 - **Level Rewards**: Unlock roles, channels, and special benefits
 - **Leaderboards**: Server-wide rankings and statistics
@@ -33,12 +37,14 @@ A feature-rich, all-in-one Discord bot designed to provide a complete server man
 - **Achievement System**: Unlock badges and special rewards
 
 ### 🎫 Ticket System
+
 - **Support Tickets**: Create tickets with categories and priorities
 - **Staff Assignment**: Automatic staff assignment based on category
 - **Thread Integration**: Modern thread-based ticket system
 - **Custom Workflows**: Configurable ticket workflows and automation
 
 ### 📝 Logging & Analytics
+
 - **Comprehensive Logging**: Message edits/deletes, member events, moderation
 - **Server Analytics**: Growth tracking, activity metrics, engagement stats
 - **Audit Trail**: Complete audit trail for all server activities
@@ -47,6 +53,7 @@ A feature-rich, all-in-one Discord bot designed to provide a complete server man
 ## 🚀 Quick Start
 
 ### Prerequisites
+
 - Node.js 18.0.0 or higher
 - Discord Bot Token
 - Basic knowledge of Discord.js
@@ -54,17 +61,20 @@ A feature-rich, all-in-one Discord bot designed to provide a complete server man
 ### Installation
 
 1. **Clone the repository**
+
    ```bash
-   git clone https://github.com/yourusername/eyedaemon.git
+   git clone https://github.com/imamrasyid/EyeDaemon.git
    cd eyedaemon
    ```
 
 2. **Install dependencies**
+
    ```bash
    npm install
    ```
 
 3. **Configure environment**
+
    ```bash
    cp .env.example .env
    # Edit .env with your bot token and settings
@@ -76,6 +86,7 @@ A feature-rich, all-in-one Discord bot designed to provide a complete server man
    ```
 
 ### Development Mode
+
 ```bash
 npm run dev
 ```
@@ -101,7 +112,9 @@ FEATURE_LEVELING=true
 ```
 
 ### Feature Flags
+
 Enable/disable features by setting these environment variables:
+
 - `FEATURE_MUSIC=true/false`
 - `FEATURE_MODERATION=true/false`
 - `FEATURE_ECONOMY=true/false`
@@ -112,6 +125,7 @@ Enable/disable features by setting these environment variables:
 ## 🏗️ Architecture
 
 ### Modular Design
+
 The bot follows a modular architecture with clear separation of concerns:
 
 ```
@@ -129,12 +143,14 @@ src/bot/
 ### Core Components
 
 #### Base Classes
+
 - **BaseCommand**: Foundation for all commands with validation, permissions, and error handling
 - **BaseEvent**: Base for all event handlers with error handling and statistics
 - **BaseInteraction**: Base for all interactions (buttons, select menus, modals)
 - **BaseModule**: Modular system foundation with lifecycle management
 
 #### Managers
+
 - **EventManager**: Handles all Discord events with error handling and statistics
 - **CommandHandler**: Processes commands with cooldowns and validation
 - **InteractionHandler**: Manages all interactions with proper error handling
@@ -142,6 +158,7 @@ src/bot/
 - **RateLimiter**: Advanced rate limiting with burst protection
 
 #### Services
+
 - **DatabaseService**: SQLite/PostgreSQL support with connection pooling
 - **LoggingService**: Comprehensive logging with pino and structured data
 - **AudioService**: Advanced audio processing with multiple source support
@@ -149,12 +166,14 @@ src/bot/
 ## 🎵 Music System Details
 
 ### Supported Platforms
+
 - **YouTube**: Full playlist and video support
 - **Spotify**: Track and playlist support (requires API key)
 - **SoundCloud**: Track and playlist support
 - **Direct URLs**: MP3, AAC, and other audio formats
 
 ### Audio Features
+
 - **Volume Control**: 0-100% with smooth transitions
 - **Audio Filters**: Bass boost, nightcore, vaporwave, karaoke
 - **Queue Management**: Add, remove, move, shuffle, loop
@@ -164,6 +183,7 @@ src/bot/
 ## 🔨 Moderation Features
 
 ### User Management
+
 - **Kick**: Remove users with reason logging
 - **Ban**: Permanent bans with appeal system
 - **Mute**: Temporary voice/text restrictions
@@ -171,6 +191,7 @@ src/bot/
 - **Warn**: Warning system with escalation
 
 ### Auto-Moderation
+
 - **Spam Detection**: Message flooding protection
 - **Word Filters**: Custom word/phrase blocking
 - **Link Filtering**: Block suspicious/NSFW links
@@ -180,6 +201,7 @@ src/bot/
 ## 💰 Economy System
 
 ### Currency Features
+
 - **Starting Balance**: Configurable starting amount
 - **Daily Rewards**: Daily claim system with streaks
 - **Work System**: Multiple job types with different rewards
@@ -187,6 +209,7 @@ src/bot/
 - **Bank System**: Secure storage with interest
 
 ### Games
+
 - **Slots**: Casino-style slot machine
 - **Coinflip**: 50/50 chance game
 - **Blackjack**: Classic card game
@@ -196,12 +219,14 @@ src/bot/
 ## 📈 Leveling System
 
 ### XP Sources
+
 - **Text Messages**: XP for active chatting
 - **Voice Activity**: XP for time in voice channels
 - **Command Usage**: Bonus XP for using commands
 - **Server Events**: XP for participating in events
 
 ### Level Rewards
+
 - **Role Rewards**: Unlock roles at specific levels
 - **Channel Access**: Access to exclusive channels
 - **Command Unlock**: Unlock special commands
@@ -211,6 +236,7 @@ src/bot/
 ## 🔧 Commands
 
 ### Music Commands
+
 - `!play <song/url>` - Play music from various sources
 - `!skip` - Skip current track
 - `!stop` - Stop playback and clear queue
@@ -221,6 +247,7 @@ src/bot/
 - `!shuffle` - Shuffle queue
 
 ### Moderation Commands
+
 - `!kick <user> [reason]` - Kick user from server
 - `!ban <user> [reason]` - Ban user from server
 - `!mute <user> <duration>` - Mute user
@@ -229,6 +256,7 @@ src/bot/
 - `!slowmode <seconds>` - Set slowmode
 
 ### Economy Commands
+
 - `!balance [user]` - Check balance
 - `!daily` - Claim daily reward
 - `!work` - Work for currency
@@ -239,6 +267,7 @@ src/bot/
 - `!buy <item>` - Buy item from shop
 
 ### Leveling Commands
+
 - `!rank [user]` - Check level and XP
 - `!leaderboard [type]` - View leaderboards
 - `!givexp <user> <amount>` - Give XP (admin)
@@ -247,6 +276,7 @@ src/bot/
 ## 📊 Statistics
 
 The bot tracks comprehensive statistics:
+
 - Command usage statistics
 - User activity metrics
 - Server growth tracking
@@ -254,6 +284,7 @@ The bot tracks comprehensive statistics:
 - Feature usage analytics
 
 View statistics with:
+
 ```bash
 npm run stats
 ```
@@ -261,18 +292,21 @@ npm run stats
 ## 🔒 Security
 
 ### Permission System
+
 - **Granular Permissions**: Fine-grained permission control
 - **Role-based Access**: Permission inheritance from roles
 - **User-specific Permissions**: Override role permissions
 - **Guild-specific Settings**: Per-server configuration
 
 ### Rate Limiting
+
 - **Command Cooldowns**: Prevent spam with configurable cooldowns
 - **Burst Protection**: Protect against rapid command usage
 - **Global Limits**: Server-wide rate limiting
 - **User-specific Limits**: Individual user rate limiting
 
 ### Data Protection
+
 - **Secure Storage**: Encrypted sensitive data storage
 - **Audit Logging**: Complete audit trail for all actions
 - **Data Sanitization**: Input validation and sanitization
@@ -283,16 +317,17 @@ npm run stats
 ### Adding New Commands
 
 1. Create command file in appropriate category:
+
 ```javascript
-const { BaseCommand } = require('../../base/BaseCommand');
+const { BaseCommand } = require("../../base/BaseCommand");
 
 class MyCommand extends BaseCommand {
   constructor(client) {
     super(client, {
-      name: 'mycommand',
-      description: 'My command description',
-      category: 'Utility',
-      usage: '<argument>'
+      name: "mycommand",
+      description: "My command description",
+      category: "Utility",
+      usage: "<argument>",
     });
   }
 
@@ -309,15 +344,16 @@ module.exports = MyCommand;
 ### Adding New Modules
 
 1. Create module file in `src/bot/modules/`:
+
 ```javascript
-const { BaseModule } = require('../base/BaseModule');
+const { BaseModule } = require("../base/BaseModule");
 
 class MyModule extends BaseModule {
   constructor(client) {
     super(client, {
-      name: 'MyModule',
-      description: 'My module description',
-      version: '1.0.0'
+      name: "MyModule",
+      description: "My module description",
+      version: "1.0.0",
     });
   }
 
@@ -338,6 +374,7 @@ module.exports = MyModule;
 ### Database Schema
 
 The bot uses a comprehensive database schema with tables for:
+
 - Guilds and member information
 - Economy and leveling data
 - Music playlists and queue history
@@ -356,6 +393,7 @@ We welcome contributions! Please see our contributing guidelines:
 5. Submit a pull request
 
 ### Code Style
+
 - Use consistent indentation (2 spaces)
 - Follow existing naming conventions
 - Add JSDoc comments for public methods
@@ -365,6 +403,7 @@ We welcome contributions! Please see our contributing guidelines:
 ## 🐛 Bug Reports
 
 Please report bugs using the GitHub issue tracker. Include:
+
 - Bot version
 - Node.js version
 - Error messages and stack traces
@@ -385,6 +424,7 @@ This project is licensed under the ISC License - see the [LICENSE](LICENSE) file
 ## 📞 Support
 
 For support and questions:
+
 - Create an issue on GitHub
 - Check the documentation
 - Review the FAQ
