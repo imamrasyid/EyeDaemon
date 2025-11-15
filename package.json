@@ -4,22 +4,10 @@
   "description": "Feature-rich Discord bot with music, moderation, economy, leveling, and more",
   "main": "src/bot/index.js",
   "scripts": {
-    "test": "jest --coverage",
-    "test:watch": "jest --watch",
-    "test:unit": "jest tests/unit --coverage",
-    "test:integration": "jest tests/integration --coverage",
     "start": "node src/bot/index.js",
     "dev": "nodemon src/bot/index.js",
     "bot": "node src/bot/index.js",
-    "server": "node src/server/server.js",
-    "build": "echo \"No build step required for Node.js\"",
-    "lint": "echo \"No linter configured\"",
-    "logs": "tail -f logs/bot.log",
-    "migrate": "node src/bot/scripts/migrate.js up",
-    "migrate:down": "node src/bot/scripts/migrate.js down",
-    "migrate:status": "node src/bot/scripts/migrate.js status",
-    "migrate:generate": "node src/bot/scripts/migrate.js generate",
-    "verify:commands": "node src/bot/scripts/verify-commands.js"
+    "server": "node src/server/server.js"
   },
   "keywords": [
     "discord",
