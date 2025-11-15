@@ -3,10 +3,9 @@
 # ⚖️ Terms of Service
 
 **EyeDaemon** – Discord Music Bot  
-_Last updated: 10 November 2025_
+_Last updated: 14 November 2025_
 
-[🎧 Add to Server](https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot+applications.commands&permissions=36700160)  
-[📖 GitHub](https://github.com/imamrasyid/EyeDaemon) · [💬 Support](https://discord.gg/your-invite) · [📧 Email](mailto:imamrasyidw@gmail.com)
+[📖 GitHub](https://github.com/imamrasyid/EyeDaemon) · [💬 Discussions](https://github.com/imamrasyid/EyeDaemon/discussions) · [📧 Email](mailto:imamrasyidw@gmail.com)
 
 </div>
 
@@ -15,12 +14,12 @@ _Last updated: 10 November 2025_
 ## 1. Acceptance of Terms
 
 By inviting or interacting with **EyeDaemon** you agree to these Terms.  
-If you don’t agree, please **remove** the bot from your server immediately.
+If you don't agree, please **remove** the bot from your server immediately.
 
 <details>
 <summary>🤔 Not sure what this means?</summary>
 
-> Think of it like installing an app—by using it, you automatically say “OK” to the rules.
+> Think of it like installing an app—by using it, you automatically say "OK" to the rules.
 
 </details>
 
@@ -46,7 +45,7 @@ You **may not** use the bot to:
 
 | ❌                                               | Consequence                           |
 | ------------------------------------------------ | ------------------------------------- |
-| Break [Discord’s ToS](https://discord.com/terms) | Instant global blacklist              |
+| Break [Discord's ToS](https://discord.com/terms) | Instant global blacklist              |
 | Harass, spam, or perform illegal activities      | Permanent ban + report to Discord     |
 | Reverse-engineer or redistribute the code        | DMCA takedown & legal follow-up       |
 | Sell or monetize the bot without permission      | Revoked license + invoice for damages |
@@ -55,12 +54,12 @@ You **may not** use the bot to:
 
 ## 4. Liability & Warranty
 
-EyeDaemon is provided **“as-is”** without any warranty.  
+EyeDaemon is provided **"as-is"** without any warranty.  
 We are **not responsible** for:
 
 - Server outages, data loss, or Discord hiccups.
 - Copyright claims on media streamed from third-party sites.
-- Bugs that eat your homework (but we’ll try to fix them fast).
+- Bugs that eat your homework (but we'll try to fix them fast).
 
 ---
 
@@ -70,7 +69,7 @@ We can update, pause, or remove features at any time.
 Major ToS changes will be announced via:
 
 1. GitHub [releases](https://github.com/imamrasyid/EyeDaemon/releases)
-2. `#announcements` channel on our [support server](https://discord.gg/your-invite)
+2. GitHub [discussions](https://github.com/imamrasyid/EyeDaemon/discussions)
 
 ---
 
@@ -78,11 +77,11 @@ Major ToS changes will be announced via:
 
 Found a bug or have a legal question?
 
-| Channel    | Handle                                                |
-| ---------- | ----------------------------------------------------- |
-| 📧 Email   | [imamrasyidw@gmail.com](mailto:imamrasyidw@gmail.com) |
-| 🌐 Website | _Coming soon_                                         |
-| 💬 Discord | [`@EyeDaemon`](https://discord.gg/your-invite)        |
+| Channel    | Handle                                                             |
+| ---------- | ------------------------------------------------------------------ |
+| 📧 Email   | [imamrasyidw@gmail.com](mailto:imamrasyidw@gmail.com)              |
+| 🌐 Website | _Coming soon_                                                      |
+| 💬 GitHub  | [Discussions](https://github.com/imamrasyid/EyeDaemon/discussions) |
 
 ---
 

@@ -1,87 +1,50 @@
-const EyeDaemonClient = require('./EyeDaemonClient');
-const { system: logger } = require('./services/logging.service');
+/**
+ * EyeDaemon Bot - New Bootstrap Entry Point
+ * 
+ * This is the new entry point using the CodeIgniter-inspired architecture.
+ * Uses the Bot class from bootstrap.js to initialize and run the bot.
+ */
+
+const Bot = require('./bootstrap');
+const logger = require('./system/helpers/logger_helper');
+const { ensureServerRunning } = require('./system/helpers/server_helper');
 
 /**
- * EyeDaemon Bot - Main entry point
+ * Main function to start the bot
  */
 async function main() {
-  try {
-    logger.info('Starting EyeDaemon Bot');
-    
-    // Create bot client
-    const client = new EyeDaemonClient();
-    
-    // Handle process errors
-    process.on('uncaughtException', (error) => {
-      logger.error('Uncaught Exception', { 
-        error: error.message,
-        stack: error.stack 
-      });
-      
-      // Attempt graceful shutdown
-      if (client && client.shutdown) {
-        client.shutdown().finally(() => {
-          process.exit(1);
+    try {
+        logger.info('Starting EyeDaemon Bot (New Architecture)');
+
+        // Pastikan audio source server berjalan sebelum bot dimulai
+        await ensureServerRunning();
+
+        // Create and initialize bot instance
+        const bot = new Bot();
+        await bot.init();
+
+        // Keep the process alive
+        process.stdin.resume();
+
+        logger.info('Bot is running');
+    } catch (error) {
+        logger.error('Failed to start EyeDaemon Bot', {
+            error: error.message,
+            stack: error.stack,
         });
-      } else {
         process.exit(1);
-      }
-    });
-
-    process.on('unhandledRejection', (reason, promise) => {
-      logger.error('Unhandled Rejection', { 
-        reason: reason?.message || reason,
-        stack: reason?.stack 
-      });
-    });
-
-    // Handle graceful shutdown
-    process.on('SIGINT', () => {
-      logger.info('Received SIGINT, shutting down gracefully');
-      if (client && client.shutdown) {
-        client.shutdown().finally(() => {
-          process.exit(0);
-        });
-      } else {
-        process.exit(0);
-      }
-    });
-
-    process.on('SIGTERM', () => {
-      logger.info('Received SIGTERM, shutting down gracefully');
-      if (client && client.shutdown) {
-        client.shutdown().finally(() => {
-          process.exit(0);
-        });
-      } else {
-        process.exit(0);
-      }
-    });
-
-    // Initialize and start the bot
-    await client.initialize();
-    
-    // Keep the process alive
-    process.stdin.resume();
-    
-  } catch (error) {
-    logger.error('Failed to start EyeDaemon Bot', { 
-      error: error.message,
-      stack: error.stack 
-    });
-    process.exit(1);
-  }
+    }
 }
 
 // Run the main function
 if (require.main === module) {
-  main().catch((error) => {
-    logger.error('Fatal error in main function', { 
-      error: error.message,
-      stack: error.stack 
+    main().catch((error) => {
+        logger.error('Fatal error in main function', {
+            error: error.message,
+            stack: error.stack,
+        });
+        process.exit(1);
     });
-    process.exit(1);
-  });
 }
 
 module.exports = { main };

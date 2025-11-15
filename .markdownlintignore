@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Coverage reports
+coverage/
+
+# Build outputs
+dist/
+build/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

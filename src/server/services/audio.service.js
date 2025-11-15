@@ -1,196 +1,135 @@
-const { spawn } = require("child_process");
-const logger = require("../utils/logger");
-const { config } = require("../config");
-const infoCache = new Map();
+/**
+ * AudioService
+ * 
+ * Service for handling audio streaming from YouTube with optional ffmpeg processing.
+ * Manages stream lifecycle, cleanup, and applies audio filters.
+ * 
+ * Requirements: 8.1, 8.2, 8.3, 8.4
+ */
+const BaseService = require('./base.service');
+const { ServiceError } = require('../utils/errors');
 
-// =============================
-// 🔹 Helper Functions
-// =============================
-function normalizeInput(q) {
-    return `ytsearch1:${q}`;
-}
-
-function sanitizeQuery(q) {
-    return q.replace(/[;&|$><`]/g, "").trim();
-}
-
-function safeKill(proc) {
-    if (!proc || proc.killed) return;
-    try { proc.kill("SIGTERM"); } catch { }
-}
-
-function buildFilterArgs(preset) {
-    if (!preset || preset === "none") return [];
-
-    switch (preset) {
-        case "bassboost":
-            return ["-af", "bass=g=10"];
-        case "nightcore":
-            return ["-af", "asetrate=48000*1.1,atempo=1.1,aresample=48000"];
-        case "vaporwave":
-            return ["-af", "asetrate=44100*0.85,atempo=1,aresample=44100"];
-        case "8d":
-            return ["-af", "apulsator=mode=sine:hz=0.09"];
-        case "karaoke":
-            return ["-af", "stereotools=mlev=0.015"];
-        default:
-            if (preset.startsWith("pitch:")) {
-                const p = Math.max(0.5, Math.min(2, Number(preset.split(":")[1] || 1)));
-                return ["-af", `asetrate=48000*${p},aresample=48000`];
-            }
-            if (preset.startsWith("speed:")) {
-                const s = Math.max(0.5, Math.min(2, Number(preset.split(":")[1] || 1)));
-                return ["-af", `atempo=${s}`];
-            }
-            return [];
-    }
-}
-
-// =============================
-// 🔹 Fetch Metadata
-// =============================
-async function getInfo(query) {
-    const startPerf = performance.now();
-    if (infoCache.has(query)) {
-        logger.debug(`getInfo cache hit for "${query}" in ${(performance.now() - startPerf).toFixed(2)}ms`);
-        return infoCache.get(query);
+class AudioService extends BaseService {
+    /**
+     * Create a new AudioService
+     * @param {Object} config - Configuration object
+     * @param {Object} dependencies - Dependencies (ytdlpProvider, ffmpegProvider)
+     */
+    constructor(config, dependencies) {
+        super(config, dependencies);
+        this.ytdlpProvider = dependencies.ytdlpProvider;
+        this.ffmpegProvider = dependencies.ffmpegProvider;
     }
 
-    const input = `ytsearch1:${query}`;
-    const yt = spawn("yt-dlp", [
-        "-j",               // single-line JSON, much faster than -J
-        "--flat-playlist",  // skip downloading playlist info
-        "--no-warnings",
-        "--quiet",
-        "--no-playlist",
-        "--skip-download",  // do not touch media files
-        "--write-info-json",// force metadata-only fetch
-        "-f", "bestaudio",  // limit to audio formats only
-        input
-    ]);
+    /**
+     * Stream audio to response with optional processing
+     * @param {Object} params - Streaming parameters
+     * @param {string} params.query - Search query or URL
+     * @param {number} params.start - Start position in seconds
+     * @param {string} params.filter - Audio filter preset
+     * @param {Object} params.response - Express response object
+     * @param {string} params.format - Output format (webm, mp3)
+     * @returns {Promise<void>}
+     */
+    async streamAudio({ query, start = 0, filter = 'none', response, format = 'webm' }) {
+        const startTime = Date.now();
 
-    let json = "", err = "";
-    yt.stdout.on("data", d => json += d.toString());
-    yt.stderr.on("data", d => err += d.toString());
+        this.log('info', 'Starting audio stream', { query, start, filter, format });
 
-    return new Promise((resolve, reject) => {
-        yt.on("close", (code) => {
-            const elapsed = (performance.now() - startPerf).toFixed(2);
-            if (code !== 0) {
-                logger.error(`getInfo failed for "${query}" after ${elapsed}ms`);
-                return reject(new Error(err || "yt-dlp failed"));
-            }
+        try {
+            // Sanitize input
+            const sanitizedQuery = this.sanitizeQuery(query);
 
-            try {
-                const data = JSON.parse(json);
-                const e = data.entries?.[0] || data;
-                const result = {
-                    title: e.title,
-                    url: e.webpage_url || e.url,
-                    durationSec: Number(e.duration || 0),
-                    thumbnail: e.thumbnail || e.thumbnails?.pop()?.url || null
-                };
-                infoCache.set(query, result);
-                setTimeout(() => infoCache.delete(query), 10 * 60_000);
-                logger.debug(`getInfo resolved for "${query}" in ${elapsed}ms`);
-                resolve(result);
-            } catch (ex) {
-                logger.error(`getInfo parsing failed for "${query}" after ${elapsed}ms`);
-                reject(new Error("Invalid metadata: " + ex.message));
-            }
-        });
-    });
-}
+            // Set response headers
+            response.setHeader('Content-Type', `audio/${format}`);
+            response.setHeader('Transfer-Encoding', 'chunked');
+            response.setHeader('Cache-Control', 'no-store');
 
-// =============================
-// 🔹 Stream Audio
-// =============================
-async function streamAudio(query, res, opts = {}) {
-    const startPerf = performance.now();
-    const { start = 0, filter = "none", format = "webm" } = opts;
-    const input = normalizeInput(sanitizeQuery(query));
+            // Get audio stream from yt-dlp
+            const ytdlpStream = await this.ytdlpProvider.getAudioStream(sanitizedQuery);
 
-    logger.info(`🎧 stream: ${input} start=${start}s filter=${filter} format=${format}`);
+            // Check if ffmpeg processing is needed
+            const needsProcessing = start > 0 || filter !== 'none' || format !== 'webm';
 
-    res.setHeader("Content-Type", `audio/${format}`);
-    res.setHeader("Transfer-Encoding", "chunked");
-    res.setHeader("Cache-Control", "no-store");
+            if (needsProcessing) {
+                // Process with ffmpeg
+                const processedStream = await this.ffmpegProvider.processAudio({
+                    inputStream: ytdlpStream,
+                    start,
+                    filter,
+                    format,
+                });
 
-    const yt = spawn("yt-dlp", [
-        "-f", "bestaudio",
-        "--no-cache-dir",
-        "--no-playlist",
-        "-o", "-",
-        "--quiet", "--no-warnings",
-        input
-    ]);
+                processedStream.pipe(response);
 
-    let ytErr = "";
-    yt.stderr.on("data", d => ytErr += d.toString());
-    yt.on("error", err => logger.error("yt-dlp spawn error:", err));
-
-    const TIMEOUT_MS = 60000;
-    const ytTimeout = setTimeout(() => {
-        logger.warn("⏰ yt-dlp timeout reached");
-        safeKill(yt);
-    }, TIMEOUT_MS);
-
-    const needFfmpeg = (start > 0) || (filter && filter !== "none") || (format !== "webm");
-    const startTime = Date.now();
-
-    if (needFfmpeg) {
-        const ffArgs = [
-            "-loglevel", "error",
-            "-hide_banner", "-nostats",
-            ...(start > 0 ? ["-ss", String(start)] : []),
-            "-i", "pipe:0",
-            ...buildFilterArgs(filter),
-            "-f", format,
-            "-acodec", format === "mp3" ? "libmp3lame" : "libopus",
-            "-b:a", "128k",
-            "pipe:1"
-        ];
-
-        const ff = spawn(config.ffmpegPath || "ffmpeg", ffArgs);
-
-        yt.stdout.pipe(ff.stdin);
-        ff.stdout.pipe(res);
-
-        let ffErr = "";
-        ff.stderr.on("data", d => ffErr += d.toString());
-        ff.on("error", err => logger.error("ffmpeg spawn error:", err));
-
-        const closeAll = () => { safeKill(ff); safeKill(yt); clearTimeout(ytTimeout); };
-        res.on("close", closeAll);
-        res.on("error", closeAll);
-
-        ff.on("close", (code) => {
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-            const perfElapsed = (performance.now() - startPerf).toFixed(2);
-            if (code === 0) {
-                logger.info(`✅ stream done (ffmpeg) in ${elapsed}s, total ${perfElapsed}ms`);
+                // Setup cleanup handlers
+                this.setupStreamCleanup(processedStream, ytdlpStream, response);
             } else {
-                logger.error(`ffmpeg exited ${code}: ${ffErr}`);
-            }
-            closeAll();
-        });
-    } else {
-        yt.stdout.pipe(res);
+                // Direct stream without processing
+                ytdlpStream.pipe(response);
 
-        const closeAll = () => { safeKill(yt); clearTimeout(ytTimeout); };
-        res.on("close", closeAll);
-        res.on("error", closeAll);
-
-        yt.on("close", (code) => {
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-            const perfElapsed = (performance.now() - startPerf).toFixed(2);
-            if (code === 0) {
-                logger.info(`✅ stream done (direct) in ${elapsed}s, total ${perfElapsed}ms`);
-            } else {
-                logger.error(`yt-dlp exited ${code}: ${ytErr}`);
+                this.setupStreamCleanup(ytdlpStream, null, response);
             }
+
+            const duration = Date.now() - startTime;
+            this.log('info', 'Audio stream started successfully', { query, duration });
+        } catch (error) {
+            this.handleError(error, 'streamAudio');
+        }
+    }
+
+    /**
+     * Sanitize query string to prevent command injection
+     * @param {string} query - Raw query string
+     * @returns {string} Sanitized query
+     */
+    sanitizeQuery(query) {
+        // Remove dangerous characters that could be used for command injection
+        return query.replace(/[;&|$><`]/g, '').trim();
+    }
+
+    /**
+     * Setup stream cleanup handlers
+     * @param {Stream} primaryStream - Main stream to cleanup
+     * @param {Stream|null} secondaryStream - Secondary stream to cleanup (optional)
+     * @param {Object} response - Express response object
+     */
+    setupStreamCleanup(primaryStream, secondaryStream, response) {
+        const cleanup = () => {
+            if (primaryStream && !primaryStream.destroyed) {
+                primaryStream.destroy();
+                this.log('debug', 'Primary stream destroyed');
+            }
+            if (secondaryStream && !secondaryStream.destroyed) {
+                secondaryStream.destroy();
+                this.log('debug', 'Secondary stream destroyed');
+            }
+        };
+
+        // Cleanup on response events
+        response.on('close', () => {
+            this.log('debug', 'Response closed, cleaning up streams');
+            cleanup();
         });
+
+        response.on('error', (error) => {
+            this.log('error', 'Response error, cleaning up streams', { error: error.message });
+            cleanup();
+        });
+
+        // Cleanup on stream errors
+        primaryStream.on('error', (error) => {
+            this.log('error', 'Primary stream error', { error: error.message });
+            cleanup();
+        });
+
+        if (secondaryStream) {
+            secondaryStream.on('error', (error) => {
+                this.log('error', 'Secondary stream error', { error: error.message });
+                cleanup();
+            });
+        }
     }
 }
 
-module.exports = { streamAudio, getInfo };
+module.exports = AudioService;
