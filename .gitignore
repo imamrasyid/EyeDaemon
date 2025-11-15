@@ -250,7 +250,6 @@ $RECYCLE.BIN/
 # Downloaded audio files (untuk music bot)
 downloads/
 audio/
-music/
 *.mp3
 *.mp4
 *.m4a
