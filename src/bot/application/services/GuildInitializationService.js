@@ -137,11 +137,17 @@ class GuildInitializationService extends BaseService {
         const configJson = JSON.stringify(defaultConfig);
 
         // Insert or update guild record
+        const now = Math.floor(Date.now() / 1000);
+
         await db.query(
-            `INSERT INTO guilds (guild_id, guild_name, config) 
-             VALUES (?, ?, ?) 
-             ON CONFLICT(guild_id) DO UPDATE SET guild_name = ?, config = ?`,
-            [guild.id, guild.name, configJson, guild.name, configJson]
+            `INSERT INTO guilds (guild_id, guild_name, config, id, updated_at) 
+             VALUES (?, ?, ?, ?, ?) 
+             ON CONFLICT(guild_id) DO UPDATE SET 
+                guild_name = excluded.guild_name,
+                config = excluded.config,
+                id = excluded.id,
+                updated_at = excluded.updated_at`,
+            [guild.id, guild.name, configJson, guild.id, now]
         );
 
         this.log(`Saved guild data for ${guild.id}`, 'debug');
@@ -167,6 +173,8 @@ class GuildInitializationService extends BaseService {
                 throw new Error('Database connection not available');
             }
 
+            const now = Math.floor(Date.now() / 1000);
+
             // Create unique member ID
             const memberId = `${guild.id}-${member.user.id}-${Date.now()}`;
 
@@ -180,6 +188,27 @@ class GuildInitializationService extends BaseService {
                 this.log(`Member ${member.user.tag} already exists in guild ${guild.id}`, 'debug');
                 return false;
             }
+
+            // Upsert user profile to satisfy FK constraints
+            await db.query(
+                `INSERT INTO user_profiles (user_id, username, discriminator, avatar_url, bot, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(user_id) DO UPDATE SET
+                    username = excluded.username,
+                    discriminator = excluded.discriminator,
+                    avatar_url = excluded.avatar_url,
+                    bot = excluded.bot,
+                    updated_at = excluded.updated_at`,
+                [
+                    member.user.id,
+                    member.user.username,
+                    member.user.discriminator ?? null,
+                    member.user.displayAvatarURL?.() ?? null,
+                    member.user.bot ? 1 : 0,
+                    now,
+                    now
+                ]
+            );
 
             // Get starting balance from guild config
             let startingBalance = 1000; // Default
@@ -205,8 +234,8 @@ class GuildInitializationService extends BaseService {
 
             // Create leveling record with level 1
             await db.query(
-                'INSERT INTO leveling (member_id, xp, level, total_messages) VALUES (?, ?, ?, ?)',
-                [memberId, 0, 1, 0]
+                'INSERT INTO leveling (member_id, guild_id, user_id, xp, level, total_messages) VALUES (?, ?, ?, ?, ?, ?)',
+                [memberId, guild.id, member.user.id, 0, 1, 0]
             );
 
             this.log(`Initialized member: ${member.user.tag} (${member.user.id})`, 'debug');
@@ -301,6 +330,29 @@ class GuildInitializationService extends BaseService {
 
             for (const member of batch) {
                 try {
+                    const now = Math.floor(Date.now() / 1000);
+
+                    // Upsert user profile to satisfy FK constraints
+                    await db.query(
+                        `INSERT INTO user_profiles (user_id, username, discriminator, avatar_url, bot, created_at, updated_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?)
+                         ON CONFLICT(user_id) DO UPDATE SET
+                            username = excluded.username,
+                            discriminator = excluded.discriminator,
+                            avatar_url = excluded.avatar_url,
+                            bot = excluded.bot,
+                            updated_at = excluded.updated_at`,
+                        [
+                            member.user.id,
+                            member.user.username,
+                            member.user.discriminator ?? null,
+                            member.user.displayAvatarURL?.() ?? null,
+                            member.user.bot ? 1 : 0,
+                            now,
+                            now
+                        ]
+                    );
+
                     // Check if member already exists
                     const existingMember = await db.query(
                         'SELECT id FROM members WHERE user_id = ? AND guild_id = ?',
@@ -328,8 +380,8 @@ class GuildInitializationService extends BaseService {
 
                     // Create leveling record
                     await db.query(
-                        'INSERT INTO leveling (member_id, xp, level, total_messages) VALUES (?, ?, ?, ?)',
-                        [memberId, 0, 1, 0]
+                        'INSERT INTO leveling (member_id, guild_id, user_id, xp, level, total_messages) VALUES (?, ?, ?, ?, ?, ?)',
+                        [memberId, guild.id, member.user.id, 0, 1, 0]
                     );
 
                     initialized++;

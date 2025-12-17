@@ -4,7 +4,7 @@
  * Simple logging utility for the bot
  */
 
-const chalk = require('chalk');
+const chalk = require('chalk').default;
 
 /**
  * Log levels

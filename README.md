@@ -226,6 +226,8 @@ FEATURE_ECONOMY=true
 FEATURE_LEVELING=true
 ```
 
+Make sure your audio server settings line up: set `DISCORD_AUDIO_SOURCE_ENDPOINT` to the host that serves audio, and keep `AUDIO_SOURCE_PORT` (or `PORT` for the server) matched between the bot and the audio server.
+
 ### Turso DB Configuration
 
 EyeDaemon uses **Turso DB**, a distributed SQLite database with edge deployment capabilities. Turso provides:

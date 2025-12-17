@@ -20,7 +20,7 @@ class AudioPlayer {
     constructor(instance, params = {}) {
         this.instance = instance;
         this.players = new Map();
-        this.audioServerUrl = config.audio.sourceEndpoint || 'http://localhost:3000';
+        this.audioServerUrl = config.audio.sourceEndpoint;
     }
 
     /**

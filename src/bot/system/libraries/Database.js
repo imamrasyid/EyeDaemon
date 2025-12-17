@@ -12,6 +12,7 @@ const PreparedStatementCache = require('./PreparedStatementCache');
 const QueryPerformanceLogger = require('./QueryPerformanceLogger');
 const QueryOptimizer = require('./QueryOptimizer');
 const QueryMetricsTracker = require('./QueryMetricsTracker');
+const TransactionManager = require('./TransactionManager');
 
 class DatabaseLibrary {
     /**
@@ -49,6 +50,9 @@ class DatabaseLibrary {
         this.db = null;
         this.isConnected = false;
         this.transactionDepth = 0;
+
+        // Initialize transaction manager (will be fully initialized after connection)
+        this.transactionManager = null;
 
         // Initialize prepared statement cache
         this.preparedStatementCache = new PreparedStatementCache({
@@ -97,6 +101,16 @@ class DatabaseLibrary {
 
                     this.isConnected = true;
                     this.log('Database connected successfully to Turso DB', 'info');
+
+                    // Initialize transaction manager with database wrapper
+                    this.transactionManager = new TransactionManager(this, {
+                        maxRetries: this.config.maxRetries || 3,
+                        initialDelay: this.config.initialDelay || 100,
+                        maxDelay: this.config.maxDelay || 5000,
+                        backoffMultiplier: this.config.backoffMultiplier || 2,
+                        defaultTimeout: this.config.transactionTimeout || 30000,
+                        deadlockRetryDelay: this.config.deadlockRetryDelay || 50
+                    });
 
                     // Initialize database schema
                     const { initializeSchema } = require('../helpers/database_helper');
@@ -518,9 +532,10 @@ class DatabaseLibrary {
 
     /**
      * Begin a transaction
+     * @param {Object} options - Transaction options (timeout, etc.)
      * @returns {Promise<void>}
      */
-    async beginTransaction() {
+    async beginTransaction(options = {}) {
         if (!this.isConnected || !this.db) {
             throw new DatabaseError('Database connection not available', {
                 isConnected: this.isConnected,
@@ -528,15 +543,15 @@ class DatabaseLibrary {
             });
         }
 
-        try {
-            // Support nested transactions with savepoints
-            if (this.transactionDepth > 0) {
-                await this.db.execute(`SAVEPOINT sp_${this.transactionDepth}`);
-            } else {
-                await this.db.execute('BEGIN TRANSACTION');
-            }
+        if (!this.transactionManager) {
+            throw new DatabaseError('Transaction manager not initialized', {
+                isConnected: this.isConnected
+            });
+        }
 
-            this.transactionDepth++;
+        try {
+            await this.transactionManager.begin(options);
+            this.transactionDepth = this.transactionManager.getDepth();
             this.log(`Transaction started (depth: ${this.transactionDepth})`, 'debug');
         } catch (error) {
             throw new DatabaseError('Failed to begin transaction', {
@@ -558,24 +573,19 @@ class DatabaseLibrary {
             });
         }
 
-        if (this.transactionDepth === 0) {
-            throw new DatabaseError('No active transaction to commit', {
-                transactionDepth: this.transactionDepth
+        if (!this.transactionManager) {
+            throw new DatabaseError('Transaction manager not initialized', {
+                isConnected: this.isConnected
             });
         }
 
         try {
-            this.transactionDepth--;
-
-            // Release savepoint for nested transactions, commit for top-level
-            if (this.transactionDepth > 0) {
-                await this.db.execute(`RELEASE SAVEPOINT sp_${this.transactionDepth}`);
-            } else {
-                await this.db.execute('COMMIT');
-            }
-
+            await this.transactionManager.commit();
+            this.transactionDepth = this.transactionManager.getDepth();
             this.log(`Transaction committed (depth: ${this.transactionDepth})`, 'debug');
         } catch (error) {
+            // Sync depth after error
+            this.transactionDepth = this.transactionManager.getDepth();
             throw new DatabaseError('Failed to commit transaction', {
                 originalError: error.message,
                 transactionDepth: this.transactionDepth
@@ -595,27 +605,19 @@ class DatabaseLibrary {
             });
         }
 
-        if (this.transactionDepth === 0) {
-            throw new DatabaseError('No active transaction to rollback', {
-                transactionDepth: this.transactionDepth
+        if (!this.transactionManager) {
+            throw new DatabaseError('Transaction manager not initialized', {
+                isConnected: this.isConnected
             });
         }
 
         try {
-            this.transactionDepth--;
-
-            // Rollback to savepoint for nested transactions, rollback all for top-level
-            if (this.transactionDepth > 0) {
-                await this.db.execute(`ROLLBACK TO SAVEPOINT sp_${this.transactionDepth}`);
-            } else {
-                await this.db.execute('ROLLBACK');
-            }
-
+            await this.transactionManager.rollback();
+            this.transactionDepth = this.transactionManager.getDepth();
             this.log(`Transaction rolled back (depth: ${this.transactionDepth})`, 'debug');
         } catch (error) {
-            // Reset transaction depth on rollback error
-            this.transactionDepth = 0;
-
+            // Sync depth after error
+            this.transactionDepth = this.transactionManager.getDepth();
             throw new DatabaseError('Failed to rollback transaction', {
                 originalError: error.message,
                 transactionDepth: this.transactionDepth
@@ -626,17 +628,29 @@ class DatabaseLibrary {
     /**
      * Execute multiple statements in a transaction
      * @param {Function} callback - Callback function to execute
+     * @param {Object} options - Transaction options (timeout, etc.)
      * @returns {Promise<any>} Result of callback
      */
-    async transaction(callback) {
-        await this.beginTransaction();
+    async transaction(callback, options = {}) {
+        if (!this.transactionManager) {
+            throw new DatabaseError('Transaction manager not initialized', {
+                isConnected: this.isConnected
+            });
+        }
 
         try {
-            const result = await callback(this);
-            await this.commit();
+            const result = await this.transactionManager.execute(async () => {
+                // Sync depth
+                this.transactionDepth = this.transactionManager.getDepth();
+                return await callback(this);
+            }, options);
+
+            // Sync depth after success
+            this.transactionDepth = this.transactionManager.getDepth();
             return result;
         } catch (error) {
-            await this.rollback();
+            // Sync depth after error
+            this.transactionDepth = this.transactionManager.getDepth();
 
             this.log(`Transaction failed and rolled back: ${error.message}`, 'error');
 
@@ -645,6 +659,113 @@ class DatabaseLibrary {
                 transactionDepth: this.transactionDepth
             });
         }
+    }
+
+    /**
+     * Execute transaction with automatic deadlock retry
+     * @param {Function} callback - Callback function to execute
+     * @param {Object} options - Transaction and retry options
+     * @returns {Promise<any>} Result of callback
+     */
+    async transactionWithRetry(callback, options = {}) {
+        if (!this.transactionManager) {
+            throw new DatabaseError('Transaction manager not initialized', {
+                isConnected: this.isConnected
+            });
+        }
+
+        try {
+            const result = await this.transactionManager.executeWithRetry(async () => {
+                // Sync depth
+                this.transactionDepth = this.transactionManager.getDepth();
+                return await callback(this);
+            }, options);
+
+            // Sync depth after success
+            this.transactionDepth = this.transactionManager.getDepth();
+            return result;
+        } catch (error) {
+            // Sync depth after error
+            this.transactionDepth = this.transactionManager.getDepth();
+
+            this.log(`Transaction with retry failed: ${error.message}`, 'error');
+
+            throw new DatabaseError('Transaction with retry failed', {
+                originalError: error.message,
+                transactionDepth: this.transactionDepth,
+                stats: this.transactionManager.getStats()
+            });
+        }
+    }
+
+    /**
+     * Recover from transaction depth inconsistency
+     * @returns {Promise<void>}
+     */
+    async recoverTransactionDepth() {
+        if (!this.transactionManager) {
+            // If no transaction manager, just reset depth
+            this.transactionDepth = 0;
+            return;
+        }
+
+        try {
+            await this.transactionManager.recoverDepth();
+            this.transactionDepth = this.transactionManager.getDepth();
+            this.log('Transaction depth recovered', 'info');
+        } catch (error) {
+            this.transactionDepth = 0;
+            throw new DatabaseError('Failed to recover transaction depth', {
+                originalError: error.message
+            });
+        }
+    }
+
+    /**
+     * Validate transaction depth consistency
+     * @returns {boolean} True if consistent
+     */
+    validateTransactionDepth() {
+        if (!this.transactionManager) {
+            return this.transactionDepth === 0;
+        }
+
+        const isConsistent = this.transactionManager.validateDepth();
+        const managerDepth = this.transactionManager.getDepth();
+
+        // Sync if inconsistent
+        if (this.transactionDepth !== managerDepth) {
+            this.transactionDepth = managerDepth;
+        }
+
+        return isConsistent;
+    }
+
+    /**
+     * Get transaction statistics
+     * @returns {Object} Transaction statistics
+     */
+    getTransactionStats() {
+        if (!this.transactionManager) {
+            return {
+                currentDepth: this.transactionDepth,
+                managerAvailable: false
+            };
+        }
+
+        return this.transactionManager.getStats();
+    }
+
+    /**
+     * Check if currently in a transaction
+     * @returns {boolean} True if in transaction
+     */
+    isInTransaction() {
+        if (!this.transactionManager) {
+            return this.transactionDepth > 0;
+        }
+
+        return this.transactionManager.isInTransaction();
     }
 
     /**

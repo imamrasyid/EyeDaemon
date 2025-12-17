@@ -22,8 +22,8 @@ class MusicModel extends Model {
         // Use track_metadata_cache table for database-backed caching
         this.tableName = 'track_metadata_cache';
 
-        // Audio server endpoint
-        this.audioServerUrl = config.audio.sourceEndpoint || 'http://localhost:3000';
+        // Audio server endpoint (from env-driven config)
+        this.audioServerUrl = config.audio.sourceEndpoint;
 
         // Cache TTL: 10 minutes (in seconds)
         this.cacheTTL = 10 * 60;

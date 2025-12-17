@@ -506,6 +506,35 @@ class EconomyModel extends Model {
             const now = Math.floor(Date.now() / 1000);
             const accountId = `${guildId}-${userId}`;
 
+            // Ensure user profile exists to satisfy FK (fallback to minimal profile)
+            const profile = await this.query(
+                'SELECT user_id FROM user_profiles WHERE user_id = ?',
+                [userId]
+            );
+
+            if (!profile || profile.length === 0) {
+                await this.query(
+                    `INSERT INTO user_profiles (user_id, username, discriminator, avatar_url, bot, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)
+                     ON CONFLICT(user_id) DO UPDATE SET
+                        username = excluded.username,
+                        discriminator = excluded.discriminator,
+                        avatar_url = excluded.avatar_url,
+                        bot = excluded.bot,
+                        updated_at = excluded.updated_at`,
+                    [
+                        userId,
+                        String(userId),
+                        null,
+                        null,
+                        0,
+                        now,
+                        now
+                    ]
+                );
+                this.log(`Inserted fallback user_profile for ${userId}`, 'warn');
+            }
+
             await this.insert({
                 id: accountId,
                 guild_id: guildId,

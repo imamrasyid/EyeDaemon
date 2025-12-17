@@ -120,6 +120,39 @@ class Bot {
                 this.cacheManager = null;
             }
 
+            // Load atomic operations library
+            const AtomicOperations = require('./system/libraries/AtomicOperations');
+            this.atomicOperations = new AtomicOperations(this.database, {
+                maxRetries: 3,
+                retryDelay: 100,
+            });
+            this.client.atomicOperations = this.atomicOperations;
+            logger.info('Atomic operations initialized');
+
+            // Load mutex manager
+            const MutexManager = require('./system/libraries/MutexManager');
+            this.mutexManager = new MutexManager(this.database, {
+                defaultTimeout: 5000,
+                cleanupInterval: 60000,
+                ownerId: `bot-${this.client.user?.id || 'unknown'}`,
+            });
+            this.client.mutexManager = this.mutexManager;
+            logger.info('Mutex manager initialized');
+
+            // Load cache invalidator (requires cache manager and mutex manager)
+            if (this.cacheManager) {
+                const CacheInvalidator = require('./system/libraries/CacheInvalidator');
+                this.cacheInvalidator = new CacheInvalidator(this.cacheManager, this.mutexManager, {
+                    stampedeTimeout: 5000,
+                    defaultTTL: 600000, // 10 minutes
+                });
+                this.client.cacheInvalidator = this.cacheInvalidator;
+                logger.info('Cache invalidator initialized');
+            } else {
+                logger.warn('Cache invalidator not initialized (cache manager required)');
+                this.cacheInvalidator = null;
+            }
+
             // Load migration manager
             const MigrationManager = require('./system/database/MigrationManager');
             this.migrationManager = new MigrationManager(this.database);
@@ -161,6 +194,149 @@ class Bot {
 
             // Load queue manager for queue management
             this.queueManager = this.load.library('QueueManager');
+
+            // Load presence manager
+            const PresenceManager = require('./system/libraries/presence_manager');
+            this.presenceManager = new PresenceManager(this.client, {
+                rotationInterval: 60000,
+                defaultStatus: 'online',
+            });
+            this.client.presenceManager = this.presenceManager;
+            logger.info('Presence manager initialized');
+
+            // Initialize command manager
+            const CommandManager = require('./system/managers/command_manager');
+            this.commandManager = new CommandManager(this.client);
+            this.client.commandManager = this.commandManager;
+            logger.info('Command manager initialized');
+
+            // Initialize interaction components manager
+            const InteractionComponentsManager = require('./system/managers/interaction_components_manager');
+            this.interactionComponentsManager = new InteractionComponentsManager(this.client);
+            this.client.interactionComponentsManager = this.interactionComponentsManager;
+            logger.info('Interaction components manager initialized');
+
+            // Initialize message command manager
+            const MessageCommandManager = require('./system/managers/message_command_manager');
+            this.messageCommandManager = new MessageCommandManager(this.client);
+            this.client.messageCommandManager = this.messageCommandManager;
+            logger.info('Message command manager initialized');
+
+            // Initialize bot identity service
+            const BotIdentityService = require('./system/services/bot_identity_service');
+            this.botIdentityService = new BotIdentityService(this.client);
+            this.client.botIdentityService = this.botIdentityService;
+            logger.info('Bot identity service initialized');
+
+            // Initialize embed builder
+            const EmbedBuilderLibrary = require('./system/libraries/embed_builder');
+            this.embedBuilder = new EmbedBuilderLibrary(this.client);
+            this.client.embedBuilder = this.embedBuilder;
+            logger.info('Embed builder initialized');
+
+            // Initialize pagination manager
+            const PaginationManager = require('./system/managers/pagination_manager');
+            this.paginationManager = new PaginationManager(this.client);
+            this.client.paginationManager = this.paginationManager;
+            logger.info('Pagination manager initialized');
+
+            // Initialize message service
+            const MessageService = require('./system/services/message_service');
+            this.messageService = new MessageService(this.client);
+            this.client.messageService = this.messageService;
+            logger.info('Message service initialized');
+
+            // Initialize attachment service
+            const AttachmentService = require('./system/services/attachment_service');
+            this.attachmentService = new AttachmentService(this.client);
+            this.client.attachmentService = this.attachmentService;
+            logger.info('Attachment service initialized');
+
+            // Initialize member management service
+            const MemberManagementService = require('./system/services/member_management_service');
+            this.memberManagementService = new MemberManagementService(this.client);
+            this.client.memberManagementService = this.memberManagementService;
+            logger.info('Member management service initialized');
+
+            // Initialize role management service
+            const RoleManagementService = require('./system/services/role_management_service');
+            this.roleManagementService = new RoleManagementService(this.client);
+            this.client.roleManagementService = this.roleManagementService;
+            logger.info('Role management service initialized');
+
+            // Initialize automated moderation service
+            const AutomatedModerationService = require('./system/services/automated_moderation_service');
+            this.automatedModerationService = new AutomatedModerationService(this.client);
+            this.client.automatedModerationService = this.automatedModerationService;
+            logger.info('Automated moderation service initialized');
+
+            // Initialize moderation logging service
+            const ModerationLoggingService = require('./system/services/moderation_logging_service');
+            this.moderationLoggingService = new ModerationLoggingService(this.client);
+            this.client.moderationLoggingService = this.moderationLoggingService;
+            logger.info('Moderation logging service initialized');
+
+            // Initialize automation service (if not already initialized in ready event)
+            if (!this.automationService) {
+                const AutomationService = require('./system/services/automation_service');
+                this.automationService = new AutomationService(this.client);
+                this.client.automationService = this.automationService;
+                logger.info('Automation service initialized');
+            }
+
+            // Initialize webhook service
+            const WebhookService = require('./system/services/webhook_service');
+            this.webhookService = new WebhookService(this.client);
+            this.client.webhookService = this.webhookService;
+            logger.info('Webhook service initialized');
+
+            // Initialize integration service
+            const IntegrationService = require('./system/services/integration_service');
+            this.integrationService = new IntegrationService(this.client);
+            this.client.integrationService = this.integrationService;
+            logger.info('Integration service initialized');
+
+            // Initialize economy enhancement service
+            const EconomyEnhancementService = require('./system/services/economy_enhancement_service');
+            this.economyEnhancementService = new EconomyEnhancementService(this.client);
+            this.client.economyEnhancementService = this.economyEnhancementService;
+            logger.info('Economy enhancement service initialized');
+
+            // Initialize analytics service
+            const AnalyticsService = require('./system/services/analytics_service');
+            this.analyticsService = new AnalyticsService(this.client);
+            this.client.analyticsService = this.analyticsService;
+            logger.info('Analytics service initialized');
+
+            // Initialize security service
+            const SecurityService = require('./system/services/security_service');
+            this.securityService = new SecurityService(this.client);
+            this.client.securityService = this.securityService;
+            logger.info('Security service initialized');
+
+            // Initialize developer tools service
+            const DeveloperToolsService = require('./system/services/developer_tools_service');
+            this.developerToolsService = new DeveloperToolsService(this.client);
+            this.client.developerToolsService = this.developerToolsService;
+            logger.info('Developer tools service initialized');
+
+            // Initialize experimental service
+            const ExperimentalService = require('./system/services/experimental_service');
+            this.experimentalService = new ExperimentalService(this.client);
+            this.client.experimentalService = this.experimentalService;
+            logger.info('Experimental service initialized');
+
+            // Initialize UI/experience service
+            const UIExperienceService = require('./system/services/ui_experience_service');
+            this.uiExperienceService = new UIExperienceService(this.client);
+            this.client.uiExperienceService = this.uiExperienceService;
+            logger.info('UI experience service initialized');
+
+            // Initialize database enhancement service
+            const DatabaseEnhancementService = require('./system/services/database_enhancement_service');
+            this.databaseEnhancementService = new DatabaseEnhancementService(this.client);
+            this.client.databaseEnhancementService = this.databaseEnhancementService;
+            logger.info('Database enhancement service initialized');
 
             logger.info('Core libraries loaded successfully');
         } catch (error) {
@@ -527,6 +703,18 @@ class Bot {
                 for (const [guildId] of connections) {
                     this.voiceManager.leave(guildId);
                 }
+            }
+
+            // Shutdown presence manager
+            if (this.presenceManager) {
+                this.presenceManager.shutdown();
+                logger.info('Presence manager shutdown');
+            }
+
+            // Shutdown mutex manager
+            if (this.mutexManager) {
+                await this.mutexManager.shutdown();
+                logger.info('Mutex manager shutdown');
             }
 
             // Shutdown cache manager

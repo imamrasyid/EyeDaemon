@@ -3,14 +3,16 @@
  * Base configuration with fallback values
  */
 
+const resolvedPort = parseInt(process.env.AUDIO_SOURCE_PORT || process.env.PORT, 10);
+
 module.exports = {
     // Server
-    port: process.env.AUDIO_SOURCE_PORT || 3000,
+    port: Number.isInteger(resolvedPort) ? resolvedPort : 3000,
     host: process.env.HOST || '0.0.0.0',
     env: process.env.NODE_ENV || 'development',
 
     // FFmpeg
-    ffmpegPath: require('ffmpeg-static'),
+    ffmpegPath: process.env.FFMPEG_PATH || require('ffmpeg-static'),
 
     // yt-dlp
     ytdlpPath: process.env.YTDLP_PATH || 'yt-dlp',
@@ -49,6 +51,8 @@ module.exports = {
     // Security
     cors: {
         origin: process.env.CORS_ORIGIN || '*',
-        credentials: true,
+        credentials: process.env.CORS_CREDENTIALS
+            ? process.env.CORS_CREDENTIALS === 'true'
+            : true,
     },
 };

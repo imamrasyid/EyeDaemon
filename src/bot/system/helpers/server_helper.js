@@ -9,15 +9,21 @@ const http = require('http');
 const { spawn } = require('child_process');
 const path = require('path');
 const logger = require('./logger_helper');
+const config = require('../../application/config/config');
 
 /**
  * Mengecek apakah server sudah berjalan
  * 
- * @param {string} url - URL server untuk dicek (default: http://localhost:3000/health)
+ * @param {string} url - URL server untuk dicek (default: audio server endpoint/health)
  * @param {number} timeout - Timeout dalam ms (default: 5000)
  * @returns {Promise<boolean>} - true jika server hidup, false jika tidak
  */
-function isServerAlive(url = 'http://localhost:3000/health', timeout = 5000) {
+function getAudioBaseUrl() {
+    const endpoint = config?.audio?.sourceEndpoint;
+    return endpoint.replace(/\/$/, '');
+}
+
+function isServerAlive(url = `${getAudioBaseUrl()}/health`, timeout = 5000) {
     return new Promise((resolve) => {
         const request = http.get(url, (res) => {
             // Server merespons, anggap hidup
@@ -84,7 +90,7 @@ function startServer() {
  */
 async function ensureServerRunning(options = {}) {
     const {
-        url = 'http://localhost:3000/health',
+        url = `${getAudioBaseUrl()}/health`,
         maxRetries = 10,
         retryDelay = 1000,
     } = options;

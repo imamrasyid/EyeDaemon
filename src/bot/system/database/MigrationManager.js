@@ -206,6 +206,9 @@ class MigrationManager {
         const filePath = path.join(this.config.migrationsPath, fileName);
 
         try {
+            // Clear require cache to ensure latest migration code
+            delete require.cache[require.resolve(filePath)];
+
             // Load migration module
             const migration = require(filePath);
 
@@ -221,6 +224,12 @@ class MigrationManager {
 
             this.log(`Migration ${direction}: ${fileName}`, 'info');
         } catch (error) {
+            // Log full error for debugging
+            console.error(`[MigrationManager] ${fileName} ${direction} failed:`, {
+                message: error.message,
+                stack: error.stack,
+                original: error.originalError,
+            });
             throw new DatabaseError(`Failed to execute migration ${direction}`, {
                 originalError: error.message,
                 migration: fileName,

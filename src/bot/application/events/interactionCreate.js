@@ -27,6 +27,10 @@ class InteractionCreateEvent extends BaseEvent {
                 await this.handleModal(interaction);
             } else if (interaction.isStringSelectMenu()) {
                 await this.handleSelectMenu(interaction);
+            } else if (interaction.isUserContextMenuCommand()) {
+                await this.handleUserContextMenu(interaction);
+            } else if (interaction.isMessageContextMenuCommand()) {
+                await this.handleMessageContextMenu(interaction);
             }
         } catch (error) {
             this.log('Error handling interaction', 'error', {
@@ -139,12 +143,18 @@ class InteractionCreateEvent extends BaseEvent {
             guild: interaction.guild?.name || 'DM',
         });
 
-        // Route to interaction manager
-        const interactionManager = this.client.interactionManager;
-        if (interactionManager) {
-            await interactionManager.handleInteraction(interaction);
+        // Route to interaction components manager
+        const interactionComponentsManager = this.client.interactionComponentsManager;
+        if (interactionComponentsManager) {
+            await interactionComponentsManager.handle_modal(interaction);
         } else {
-            await replyEphemeral(interaction, '❌ Interaction manager not initialized');
+            // Fallback to interaction manager
+            const interactionManager = this.client.interactionManager;
+            if (interactionManager) {
+                await interactionManager.handleInteraction(interaction);
+            } else {
+                await replyEphemeral(interaction, '❌ Interaction manager not initialized');
+            }
         }
     }
 
@@ -158,12 +168,58 @@ class InteractionCreateEvent extends BaseEvent {
             guild: interaction.guild?.name || 'DM',
         });
 
-        // Route to interaction manager
-        const interactionManager = this.client.interactionManager;
-        if (interactionManager) {
-            await interactionManager.handleInteraction(interaction);
+        // Route to interaction components manager
+        const interactionComponentsManager = this.client.interactionComponentsManager;
+        if (interactionComponentsManager) {
+            await interactionComponentsManager.handle_select_menu(interaction);
         } else {
-            await replyEphemeral(interaction, '❌ Interaction manager not initialized');
+            // Fallback to interaction manager
+            const interactionManager = this.client.interactionManager;
+            if (interactionManager) {
+                await interactionManager.handleInteraction(interaction);
+            } else {
+                await replyEphemeral(interaction, '❌ Interaction manager not initialized');
+            }
+        }
+    }
+
+    /**
+     * Handle user context menu interactions
+     * @param {Object} interaction - Discord interaction object
+     */
+    async handleUserContextMenu(interaction) {
+        this.log(`User context menu: ${interaction.commandName}`, 'debug', {
+            user: interaction.user.tag,
+            target: interaction.targetUser.tag,
+            guild: interaction.guild?.name || 'DM',
+        });
+
+        // Route to command manager
+        const commandManager = this.client.commandManager;
+        if (commandManager) {
+            await commandManager.execute_context_menu_command(interaction);
+        } else {
+            await replyEphemeral(interaction, '❌ Command manager not initialized');
+        }
+    }
+
+    /**
+     * Handle message context menu interactions
+     * @param {Object} interaction - Discord interaction object
+     */
+    async handleMessageContextMenu(interaction) {
+        this.log(`Message context menu: ${interaction.commandName}`, 'debug', {
+            user: interaction.user.tag,
+            target: interaction.targetMessage.id,
+            guild: interaction.guild?.name || 'DM',
+        });
+
+        // Route to command manager
+        const commandManager = this.client.commandManager;
+        if (commandManager) {
+            await commandManager.execute_context_menu_command(interaction);
+        } else {
+            await replyEphemeral(interaction, '❌ Command manager not initialized');
         }
     }
 

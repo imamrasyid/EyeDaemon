@@ -7,7 +7,7 @@
 
 const Controller = require('../../system/core/Controller');
 const { EmbedBuilder } = require('discord.js');
-const { replyEphemeral } = require('../../system/helpers/interaction_helper');
+const { replyEphemeral, MessageFlags } = require('../../system/helpers/interaction_helper');
 
 class EconomyController extends Controller {
     /**
@@ -552,6 +552,31 @@ class EconomyController extends Controller {
         } catch (error) {
             this.log(`Error in inventory command: ${error.message}`, 'error');
             await this.sendError(interaction, 'Failed to load inventory');
+        }
+    }
+
+    /**
+     * Override sendError to ensure interaction is acknowledged before replying.
+     * Prevents "Unknown interaction" when an error occurs after 3s window.
+     * @param {Object} interaction - Discord interaction
+     * @param {string} message - Error message
+     * @returns {Promise<void>}
+     */
+    async sendError(interaction, message) {
+        const options = { content: `❌ ${message}`, flags: MessageFlags.Ephemeral };
+
+        try {
+            if (!interaction.deferred && !interaction.replied) {
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+            }
+
+            if (interaction.replied || interaction.deferred) {
+                await interaction.editReply(options);
+            } else {
+                await interaction.reply(options);
+            }
+        } catch (error) {
+            this.log(`Failed to send error message: ${error.message}`, 'warn');
         }
     }
 

@@ -20,10 +20,28 @@ class MessageCreateEvent extends BaseEvent {
         // Ignore bot messages
         if (message.author.bot) return;
 
-        // Ignore DMs (no guild)
-        if (!message.guild) return;
-
         try {
+            // Check automated moderation first
+            const automatedModerationService = this.client.automatedModerationService;
+            if (automatedModerationService) {
+                const violation_result = await automatedModerationService.check_message(message);
+                if (violation_result.violated) {
+                    await this.handle_violation(message, violation_result);
+                    return;
+                }
+            }
+
+            // Try message command manager first (for new message command system)
+            const messageCommandManager = this.client.messageCommandManager;
+            if (messageCommandManager) {
+                await messageCommandManager.handle_message(message);
+                return;
+            }
+
+            // Fallback to legacy system
+            // Ignore DMs (no guild) for legacy system
+            if (!message.guild) return;
+
             // Get guild-specific prefix from GuildConfigService
             const adminModule = this.client.modules.get('admin');
             const guildConfigService = adminModule?.getService('GuildConfigService');
@@ -340,6 +358,64 @@ class MessageCreateEvent extends BaseEvent {
         };
 
         return adapter;
+    }
+
+    /**
+     * Handle moderation violation
+     * @param {Message} message - Discord message
+     * @param {Object} violation_result - Violation result
+     * @private
+     */
+    async handle_violation(message, violation_result) {
+        try {
+            const { violations, action } = violation_result;
+
+            // Log violation
+            this.log('Moderation violation detected', 'warn', {
+                user: message.author.tag,
+                guild: message.guild?.name,
+                violations: violations.map((v) => v.type),
+                action,
+            });
+
+            // Execute action
+            switch (action) {
+                case 'delete':
+                    await message.delete().catch(() => { });
+                    break;
+                case 'warn':
+                    await message.delete().catch(() => { });
+                    // TODO: Send warning to user
+                    break;
+                case 'kick':
+                    await message.delete().catch(() => { });
+                    if (message.member) {
+                        await message.member.kick('Automated moderation: Multiple violations').catch(() => { });
+                    }
+                    break;
+                case 'ban':
+                    await message.delete().catch(() => { });
+                    if (message.member) {
+                        await message.member.ban({ reason: 'Automated moderation: Multiple violations' }).catch(() => { });
+                    }
+                    break;
+            }
+
+            // Log to moderation logs if available
+            const moderationLoggingService = this.client.moderationLoggingService;
+            if (moderationLoggingService) {
+                await moderationLoggingService.log_automated_action(
+                    message.guild.id,
+                    message.author.id,
+                    action,
+                    violations
+                ).catch(() => { });
+            }
+        } catch (error) {
+            this.log('Failed to handle violation', 'error', {
+                error: error.message,
+            });
+        }
     }
 
     /**

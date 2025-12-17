@@ -7,7 +7,8 @@ module.exports = {
         '!src/server/server.js',
         '!src/bot/migrations/**',
         '!src/bot/scripts/**',
-        '!**/node_modules/**'
+        '!**/node_modules/**',
+        '!**/__tests__/**'
     ],
     coverageThreshold: {
         global: {
@@ -18,9 +19,13 @@ module.exports = {
         }
     },
     testMatch: [
+        '**/__tests__/**/*.test.js',
+        '**/__tests__/**/*.spec.js',
         '**/tests/**/*.test.js',
         '**/tests/**/*.spec.js'
     ],
     verbose: true,
-    testTimeout: 10000
+    testTimeout: 30000, // Increased for property-based tests
+    maxWorkers: '50%', // Limit workers for concurrent tests
+    setupFilesAfterEnv: ['<rootDir>/src/bot/__tests__/setup.js']
 };

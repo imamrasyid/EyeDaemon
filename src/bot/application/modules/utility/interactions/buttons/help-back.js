@@ -67,7 +67,9 @@ class HelpBackButton extends BaseInteraction {
                         .setStyle(ButtonStyle.Primary)
                 );
 
-            await interaction.update({ embeds: [embed], components: [row1, row2] });
+            // Acknowledge immediately to clear loading, then edit with new state
+            await interaction.deferUpdate();
+            await interaction.editReply({ embeds: [embed], components: [row1, row2] });
 
             this.log(`User ${interaction.user.tag} returned to main help menu`, 'info');
         } catch (error) {

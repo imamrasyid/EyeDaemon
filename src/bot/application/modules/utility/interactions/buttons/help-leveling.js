@@ -45,7 +45,9 @@ class HelpLevelingButton extends BaseInteraction {
                         .setStyle(ButtonStyle.Secondary)
                 );
 
-            await interaction.update({ embeds: [embed], components: [row] });
+            // Acknowledge first to clear loading, then edit
+            await interaction.deferUpdate();
+            await interaction.editReply({ embeds: [embed], components: [row] });
 
             this.log(`Displayed leveling help for user ${interaction.user.tag}`, 'info');
         } catch (error) {

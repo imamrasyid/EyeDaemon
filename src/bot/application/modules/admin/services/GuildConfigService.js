@@ -377,14 +377,17 @@ class GuildConfigService extends BaseService {
             const configJson = JSON.stringify(currentConfig);
             const guildName = guild.name || 'Unknown Guild';
 
+            const now = Math.floor(Date.now() / 1000);
+
             await db.query(
-                `INSERT INTO guilds (guild_id, guild_name, config, updated_at) 
-                 VALUES (?, ?, ?, CURRENT_TIMESTAMP) 
+                `INSERT INTO guilds (guild_id, guild_name, config, id, updated_at) 
+                 VALUES (?, ?, ?, ?, ?) 
                  ON CONFLICT(guild_id) DO UPDATE SET 
                     config = excluded.config,
                     guild_name = excluded.guild_name,
-                    updated_at = CURRENT_TIMESTAMP`,
-                [guildId, guildName, configJson]
+                    id = excluded.id,
+                    updated_at = excluded.updated_at`,
+                [guildId, guildName, configJson, guildId, now]
             );
 
             // Invalidate cache
@@ -443,14 +446,17 @@ class GuildConfigService extends BaseService {
 
             const configJson = JSON.stringify(currentConfig);
 
+            const now = Math.floor(Date.now() / 1000);
+
             await db.query(
-                `INSERT INTO guilds (guild_id, guild_name, config, updated_at) 
-                 VALUES (?, ?, ?, CURRENT_TIMESTAMP) 
+                `INSERT INTO guilds (guild_id, guild_name, config, id, updated_at) 
+                 VALUES (?, ?, ?, ?, ?) 
                  ON CONFLICT(guild_id) DO UPDATE SET 
                     config = excluded.config,
                     guild_name = excluded.guild_name,
-                    updated_at = CURRENT_TIMESTAMP`,
-                [guildId, guildName, configJson]
+                    id = excluded.id,
+                    updated_at = excluded.updated_at`,
+                [guildId, guildName, configJson, guildId, now]
             );
 
             // Invalidate cache

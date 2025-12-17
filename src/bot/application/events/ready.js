@@ -55,11 +55,51 @@ class ReadyEvent extends BaseEvent {
         // Start periodic health checks
         this.startHealthChecks();
 
-        // Set bot presence
-        this.client.user.setPresence({
-            activities: [{ name: 'music | /play', type: 0 }],
-            status: 'online',
-        });
+        // Initialize automation service
+        try {
+            const AutomationService = require('../../system/services/automation_service');
+            this.client.automationService = new AutomationService(this.client);
+            this.log('Automation service initialized', 'info');
+        } catch (error) {
+            this.log('Failed to initialize automation service', 'warn', {
+                error: error.message,
+            });
+        }
+
+        // Initialize guild management service
+        try {
+            const GuildManagementService = require('../../system/services/guild_management_service');
+            this.client.guildManagementService = new GuildManagementService(this.client);
+            this.log('Guild management service initialized', 'info');
+        } catch (error) {
+            this.log('Failed to initialize guild management service', 'warn', {
+                error: error.message,
+            });
+        }
+
+        // Set bot presence using presence manager
+        try {
+            if (this.client.presenceManager) {
+                // Start with default presence
+                await this.client.presenceManager.set_playing('music | /play');
+
+                // Optionally start rotation
+                // await this.client.presenceManager.start_rotation([
+                //     { name: 'music | /play', type: 'playing' },
+                //     { name: 'with Discord.js', type: 'watching' },
+                // ]);
+            } else {
+                // Fallback to basic presence
+                this.client.user.setPresence({
+                    activities: [{ name: 'music | /play', type: 0 }],
+                    status: 'online',
+                });
+            }
+        } catch (error) {
+            this.log('Failed to set bot presence', 'warn', {
+                error: error.message,
+            });
+        }
     }
 
     /**

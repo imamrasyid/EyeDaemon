@@ -37,6 +37,23 @@ class LevelingController extends Controller {
     }
 
     /**
+     * Lazy load leveling service if not already available.
+     * Prevents null access when initialize was not awaited.
+     * @returns {Object|null} LevelingService instance
+     */
+    getLevelingService() {
+        if (this.levelingService) return this.levelingService;
+
+        const levelingModule = this.client.modules.get('leveling');
+        if (levelingModule) {
+            this.levelingService = levelingModule.getService('LevelingService');
+            this.rewardService = levelingModule.getService('RewardService');
+        }
+
+        return this.levelingService;
+    }
+
+    /**
      * Rank command handler
      * Displays user's rank and level
      * @param {Object} interaction - Discord interaction
@@ -46,7 +63,13 @@ class LevelingController extends Controller {
             const user = interaction.options.getUser('user') || interaction.user;
             const guildId = interaction.guild.id;
 
-            const levelData = await this.levelingService.getUserStats(user.id, guildId);
+            const service = this.getLevelingService();
+            if (!service) {
+                await this.sendError(interaction, 'Leveling service unavailable');
+                return;
+            }
+
+            const levelData = await service.getUserStats(user.id, guildId);
 
             if (!levelData) {
                 await interaction.reply({ content: '❌ No leveling data found for this user' });
@@ -86,7 +109,13 @@ class LevelingController extends Controller {
             const type = interaction.options.getString('type') || 'xp';
             const limit = 10;
 
-            const leaderboard = await this.levelingService.getLeaderboard(guildId, type, limit);
+            const service = this.getLevelingService();
+            if (!service) {
+                await this.sendError(interaction, 'Leveling service unavailable');
+                return;
+            }
+
+            const leaderboard = await service.getLeaderboard(guildId, type, limit);
 
             if (leaderboard.length === 0) {
                 await interaction.editReply({ content: '❌ No leaderboard data available' });
@@ -117,7 +146,13 @@ class LevelingController extends Controller {
             const amount = interaction.options.getInteger('amount');
             const guildId = interaction.guild.id;
 
-            const result = await this.levelingService.addXP(user.id, guildId, amount);
+            const service = this.getLevelingService();
+            if (!service) {
+                await this.sendError(interaction, 'Leveling service unavailable');
+                return;
+            }
+
+            const result = await service.addXP(user.id, guildId, amount);
 
             // Handle level-up if user leveled up
             if (result.leveledUp) {
@@ -143,7 +178,13 @@ class LevelingController extends Controller {
             const amount = interaction.options.getInteger('amount');
             const guildId = interaction.guild.id;
 
-            await this.levelingService.removeXP(user.id, guildId, amount);
+            const service = this.getLevelingService();
+            if (!service) {
+                await this.sendError(interaction, 'Leveling service unavailable');
+                return;
+            }
+
+            await service.removeXP(user.id, guildId, amount);
 
             await interaction.reply(`✅ Removed **${amount} XP** from ${user}`);
             this.log(`Admin ${interaction.user.id} removed ${amount} XP from ${user.id}`, 'info');
@@ -164,7 +205,13 @@ class LevelingController extends Controller {
             const level = interaction.options.getInteger('level');
             const guildId = interaction.guild.id;
 
-            await this.levelingService.setLevel(user.id, guildId, level);
+            const service = this.getLevelingService();
+            if (!service) {
+                await this.sendError(interaction, 'Leveling service unavailable');
+                return;
+            }
+
+            await service.setLevel(user.id, guildId, level);
 
             await interaction.reply(`✅ Set ${user}'s level to **${level}**`);
             this.log(`Admin ${interaction.user.id} set ${user.id}'s level to ${level}`, 'info');
@@ -184,7 +231,13 @@ class LevelingController extends Controller {
             const user = interaction.options.getUser('user');
             const guildId = interaction.guild.id;
 
-            await this.levelingService.resetXP(user.id, guildId);
+            const service = this.getLevelingService();
+            if (!service) {
+                await this.sendError(interaction, 'Leveling service unavailable');
+                return;
+            }
+
+            await service.resetXP(user.id, guildId);
 
             await interaction.reply(`✅ Reset ${user}'s XP and level`);
             this.log(`Admin ${interaction.user.id} reset ${user.id}'s XP`, 'info');

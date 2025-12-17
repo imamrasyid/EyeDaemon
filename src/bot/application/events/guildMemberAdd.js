@@ -191,12 +191,23 @@ class GuildMemberAddEvent extends BaseEvent {
                 return;
             }
 
-            // Assign role to member
-            await member.roles.add(role, 'Auto-role assignment');
+            // Use role management service if available
+            const roleManagementService = this.client.roleManagementService;
+            if (roleManagementService) {
+                await roleManagementService.apply_auto_roles(member.guild.id, member.user.id);
+            } else {
+                // Fallback to direct role assignment
+                await member.roles.add(role, 'Auto-role assignment');
+            }
 
             this.log(`Assigned auto-role ${role.name} to ${member.user.tag} in guild ${member.guild.name}`, 'info');
 
             // Log to moderation logs if configured
+            const moderationLoggingService = this.client.moderationLoggingService;
+            if (moderationLoggingService) {
+                await moderationLoggingService.log_member_join(member.guild.id, member.user.id);
+            }
+
             await this.logAutoRoleAssignment(member, role);
         } catch (error) {
             this.log('Failed to assign auto-role', 'error', {
