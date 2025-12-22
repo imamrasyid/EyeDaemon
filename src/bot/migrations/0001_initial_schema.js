@@ -272,32 +272,28 @@ module.exports = {
         )`);
 
         // playlists
-        await db.query(`CREATE TABLE IF NOT EXISTS user_playlists (
+        await db.query(`CREATE TABLE IF NOT EXISTS music_playlists (
             id TEXT PRIMARY KEY,
             guild_id TEXT NOT NULL,
             user_id TEXT NOT NULL,
             name TEXT NOT NULL,
-            description TEXT,
             is_public BOOLEAN DEFAULT FALSE,
-            play_count INTEGER DEFAULT 0,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (guild_id) REFERENCES guilds(guild_id) ON DELETE CASCADE,
             FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
         )`);
+        await db.query('CREATE INDEX IF NOT EXISTS idx_music_playlists_guild_user ON music_playlists(guild_id, user_id)');
 
-        await db.query(`CREATE TABLE IF NOT EXISTS playlist_tracks (
-            id TEXT PRIMARY KEY,
+        await db.query(`CREATE TABLE IF NOT EXISTS music_playlist_tracks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             playlist_id TEXT NOT NULL,
-            track_url TEXT NOT NULL,
-            track_title TEXT NOT NULL,
-            track_duration INTEGER NOT NULL,
-            track_author TEXT,
-            track_thumbnail TEXT,
+            track_data TEXT NOT NULL,
             position INTEGER NOT NULL,
-            added_at INTEGER NOT NULL,
-            FOREIGN KEY (playlist_id) REFERENCES user_playlists(id) ON DELETE CASCADE
+            added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (playlist_id) REFERENCES music_playlists(id) ON DELETE CASCADE
         )`);
+        await db.query('CREATE INDEX IF NOT EXISTS idx_music_playlist_tracks_playlist ON music_playlist_tracks(playlist_id)');
 
         // music queue (align with code expecting queue_data/current_position/filter/is_paused)
         await db.query(`CREATE TABLE IF NOT EXISTS music_queue_state (
@@ -536,7 +532,7 @@ module.exports = {
             'user_warnings', 'moderation_config', 'automod_config', 'moderation_logs', 'warnings',
             'message_logs',
             'track_metadata_cache', 'music_queue_tracks', 'music_queue_state',
-            'playlist_tracks', 'user_playlists',
+            'music_playlist_tracks', 'music_playlists',
             'level_rewards', 'leveling', 'user_levels',
             'command_statistics', 'error_logs', 'event_logs',
             'user_inventories', 'shop_items',

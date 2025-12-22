@@ -179,6 +179,12 @@ class PlaylistService extends BaseService {
                 ORDER BY p.created_at DESC
             `).all(userId, guildId);
 
+            // Ensure playlists is always an array
+            if (!Array.isArray(playlists)) {
+                this.log('Database query returned non-array result, returning empty array', 'warn');
+                return [];
+            }
+
             return playlists.map(p => ({
                 id: p.id,
                 guildId: p.guild_id,
@@ -216,6 +222,12 @@ class PlaylistService extends BaseService {
                 ORDER BY p.created_at DESC
                 LIMIT ?
             `).all(guildId, limit);
+
+            // Ensure playlists is always an array
+            if (!Array.isArray(playlists)) {
+                this.log('Database query returned non-array result, returning empty array', 'warn');
+                return [];
+            }
 
             return playlists.map(p => ({
                 id: p.id,
