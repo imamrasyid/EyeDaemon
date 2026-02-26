@@ -247,29 +247,52 @@ class MutexManager {
     async cleanup() {
         try {
             const now = Date.now();
+
+            // First, check how many expired locks exist
+            const countResult = await this.db.queryOne(
+                'SELECT COUNT(*) as count FROM distributed_locks WHERE expires_at < ?',
+                [now]
+            );
+
+            const expiredCount = countResult?.count || 0;
+
+            if (expiredCount === 0) {
+                return 0; // Nothing to clean up
+            }
+
             let totalRemoved = 0;
 
-            // Chunked delete to avoid long-running vacuum/locks
-            while (true) {
+            // If expired count is small, delete all at once for better performance
+            if (expiredCount <= this.options.cleanupBatchSize) {
                 const result = await this.db.query(
-                    `DELETE FROM distributed_locks 
-                     WHERE rowid IN (
-                        SELECT rowid FROM distributed_locks 
-                        WHERE expires_at < ? 
-                        LIMIT ?
-                     )`,
-                    [now, this.options.cleanupBatchSize]
+                    'DELETE FROM distributed_locks WHERE expires_at < ?',
+                    [now]
                 );
+                totalRemoved = result.changes || 0;
+            } else {
+                // For large cleanups, use batching to avoid long locks
+                while (true) {
+                    // Use lock_key instead of rowid for better index usage
+                    const result = await this.db.query(
+                        `DELETE FROM distributed_locks 
+                         WHERE lock_key IN (
+                            SELECT lock_key FROM distributed_locks 
+                            WHERE expires_at < ? 
+                            LIMIT ?
+                         )`,
+                        [now, this.options.cleanupBatchSize]
+                    );
 
-                const removed = result.changes || 0;
-                totalRemoved += removed;
+                    const removed = result.changes || 0;
+                    totalRemoved += removed;
 
-                if (removed < this.options.cleanupBatchSize) {
-                    break; // no more expired rows
+                    if (removed < this.options.cleanupBatchSize) {
+                        break; // no more expired rows
+                    }
+
+                    // Brief pause to prevent long transactions under load
+                    await this.sleep(this.options.cleanupSleepInterval);
                 }
-
-                // Brief pause to prevent long transactions under load
-                await this.sleep(this.options.cleanupSleepInterval);
             }
 
             this.stats.cleanupRuns++;

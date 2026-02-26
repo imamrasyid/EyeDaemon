@@ -7,17 +7,17 @@
 
 const Bot = require('./bootstrap');
 const logger = require('./system/helpers/logger_helper');
-const { ensureServerRunning } = require('./system/helpers/server_helper');
+// const { ensureServerRunning } = require('./system/helpers/server_helper');
 
 /**
  * Main function to start the bot
  */
 async function main() {
     try {
-        logger.info('Starting EyeDaemon Bot (New Architecture)');
+        logger.info('Starting EyeDaemon Bot');
 
         // Pastikan audio source server berjalan sebelum bot dimulai
-        await ensureServerRunning();
+        // await ensureServerRunning();
 
         // Create and initialize bot instance
         const bot = new Bot();
