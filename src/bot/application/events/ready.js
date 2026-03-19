@@ -10,7 +10,7 @@ const BaseEvent = require('../../system/core/BaseEvent');
 class ReadyEvent extends BaseEvent {
     constructor(client) {
         super(client, {
-            name: 'ready',
+            name: 'clientReady',
             once: true,
         });
     }

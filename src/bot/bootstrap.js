@@ -129,11 +129,10 @@ class Bot {
             this.client.atomicOperations = this.atomicOperations;
             logger.info('Atomic operations initialized');
 
-            // Load mutex manager
+            // Load mutex manager (in-memory, no DB needed)
             const MutexManager = require('./system/libraries/MutexManager');
-            this.mutexManager = new MutexManager(this.database, {
+            this.mutexManager = new MutexManager(null, {
                 defaultTimeout: 5000,
-                cleanupInterval: 60000,
                 ownerId: `bot-${this.client.user?.id || 'unknown'}`,
             });
             this.client.mutexManager = this.mutexManager;
