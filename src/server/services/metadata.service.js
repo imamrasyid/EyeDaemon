@@ -33,32 +33,34 @@ class MetadataService extends BaseService {
      * @returns {Promise<Object>} Track information (includes streamUrl)
      */
     async getTrackInfo(query) {
+        const normalizedQuery = query.trim().toLowerCase();
+
         // 1. Cache hit
-        const cached = this.getFromCache(query);
+        const cached = this.getFromCache(normalizedQuery);
         if (cached) {
             this.log('debug', 'Cache hit for metadata', { query });
             return cached;
         }
 
         // 2. In-flight deduplication — reuse existing fetch if one is running
-        if (this.inFlight.has(query)) {
+        if (this.inFlight.has(normalizedQuery)) {
             this.log('debug', 'Reusing in-flight metadata request', { query });
-            return this.inFlight.get(query);
+            return this.inFlight.get(normalizedQuery);
         }
 
         // 3. Start new fetch and register it as in-flight
-        const fetchPromise = this._fetchAndCache(query).finally(() => {
-            this.inFlight.delete(query);
+        const fetchPromise = this._fetchAndCache(query, normalizedQuery).finally(() => {
+            this.inFlight.delete(normalizedQuery);
         });
 
-        this.inFlight.set(query, fetchPromise);
+        this.inFlight.set(normalizedQuery, fetchPromise);
         return fetchPromise;
     }
 
     /**
      * @private
      */
-    async _fetchAndCache(query) {
+    async _fetchAndCache(query, normalizedQuery) {
         const startTime = Date.now();
         this.log('info', 'Fetching metadata', { query });
 
@@ -81,7 +83,7 @@ class MetadataService extends BaseService {
                 streamUrl: metadata.streamUrl || null,
             };
 
-            this.setCache(query, trackInfo);
+            this.setCache(normalizedQuery, trackInfo);
 
             this.log('info', 'Metadata fetched successfully', { query, duration: Date.now() - startTime });
             return trackInfo;

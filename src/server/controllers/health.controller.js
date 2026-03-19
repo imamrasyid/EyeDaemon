@@ -125,7 +125,7 @@ class HealthController extends BaseController {
                 });
             }, 5000); // 5 second timeout
 
-            const process = spawn(ytdlpPath, ['--version']);
+            const process = spawn(ytdlpPath, ['--version', '--no-update']);
 
             let output = '';
             let errorOutput = '';

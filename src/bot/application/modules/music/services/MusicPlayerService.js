@@ -174,6 +174,11 @@ class MusicPlayerService extends BaseService {
                 track: track,
             });
 
+            // Remove any stale Idle/error listeners before attaching new ones
+            // to prevent double-trigger when seek/setFilter/stop is called
+            player.removeAllListeners(AudioPlayerStatus.Idle);
+            player.removeAllListeners('error');
+
             // Handle track end
             player.once(AudioPlayerStatus.Idle, () => {
                 this.log(`Track finished, playing next track`, 'info');
@@ -321,6 +326,10 @@ class MusicPlayerService extends BaseService {
                         track: current,
                     });
 
+                    // Remove stale listeners before attaching new ones
+                    player.removeAllListeners(AudioPlayerStatus.Idle);
+                    player.removeAllListeners('error');
+
                     // Handle track end
                     player.once(AudioPlayerStatus.Idle, () => {
                         this.log(`Track finished, playing next track`, 'info');
@@ -409,6 +418,10 @@ class MusicPlayerService extends BaseService {
                 startTime: Date.now() - (position * 1000), // Adjust start time for seek position
                 track: current,
             });
+
+            // Remove stale listeners before attaching new ones
+            player.removeAllListeners(AudioPlayerStatus.Idle);
+            player.removeAllListeners('error');
 
             // Handle track end
             player.once(AudioPlayerStatus.Idle, () => {

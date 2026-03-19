@@ -27,58 +27,115 @@ const HealthController = require('./controllers/health.controller');
 // Import routes
 const createRoutes = require('./routes');
 
-// Initialize providers
-logger.info('Initializing providers...');
-const ytdlpProvider = new YtdlpProvider(config);
-const ffmpegProvider = new FfmpegProvider(config);
+const { spawn } = require('child_process');
 
-// Initialize services with dependencies
-logger.info('Initializing services...');
-const audioService = new AudioService(config, {
-    ytdlpProvider,
-    ffmpegProvider,
-});
+/**
+ * Update yt-dlp to the latest stable version before server starts.
+ * Resolves regardless of outcome — failure is non-fatal.
+ */
+function updateYtdlp(ytdlpPath) {
+    return new Promise((resolve) => {
+        logger.info('Checking for yt-dlp updates...');
+        const proc = spawn(ytdlpPath, ['--update-to', 'stable'], { stdio: ['ignore', 'pipe', 'pipe'] });
 
-const metadataService = new MetadataService(config, {
-    ytdlpProvider,
-});
+        let output = '';
+        proc.stdout.on('data', (d) => { output += d.toString(); });
+        proc.stderr.on('data', (d) => { output += d.toString(); });
 
-// Initialize controllers with services
-logger.info('Initializing controllers...');
-const audioController = new AudioController({
-    audioService,
-    metadataService,
-});
+        proc.on('close', (code) => {
+            const trimmed = output.trim();
+            if (code === 0) {
+                logger.info(`yt-dlp update complete: ${trimmed || 'already up-to-date'}`);
+            } else {
+                logger.warn(`yt-dlp update exited with code ${code}: ${trimmed}`);
+            }
+            resolve(); // always resolve — update failure is non-fatal
+        });
 
-const healthController = new HealthController({
-    ytdlpProvider,
-    ffmpegProvider,
-});
-
-// Create routes with controllers
-logger.info('Creating routes...');
-const routes = createRoutes({
-    audioController,
-    healthController,
-});
-
-// Create Express app
-logger.info('Creating Express application...');
-const app = createApp(routes);
-
-// Start server
-const PORT = config.get('port');
-const HOST = config.get('host');
-
-const server = app.listen(PORT, HOST, () => {
-    logger.info(`Server running on ${HOST}:${PORT}`, {
-        env: config.get('env'),
-        nodeVersion: process.version,
+        proc.on('error', (err) => {
+            logger.warn(`yt-dlp update spawn error: ${err.message}`);
+            resolve();
+        });
     });
+}
+
+async function main() {
+    // Initialize providers
+    logger.info('Initializing providers...');
+    const ytdlpProvider = new YtdlpProvider(config);
+    const ffmpegProvider = new FfmpegProvider(config);
+
+    // Update yt-dlp before accepting any requests
+    await updateYtdlp(config.get('ytdlpPath', 'yt-dlp'));
+
+    // Initialize services with dependencies
+    logger.info('Initializing services...');
+    const audioService = new AudioService(config, {
+        ytdlpProvider,
+        ffmpegProvider,
+    });
+
+    const metadataService = new MetadataService(config, {
+        ytdlpProvider,
+    });
+
+    // Initialize controllers with services
+    logger.info('Initializing controllers...');
+    const audioController = new AudioController({
+        audioService,
+        metadataService,
+    });
+
+    const healthController = new HealthController({
+        ytdlpProvider,
+        ffmpegProvider,
+    });
+
+    // Create routes with controllers
+    logger.info('Creating routes...');
+    const routes = createRoutes({
+        audioController,
+        healthController,
+    });
+
+    // Create Express app
+    logger.info('Creating Express application...');
+    const app = createApp(routes);
+
+    // Start server
+    const PORT = config.get('port');
+    const HOST = config.get('host');
+
+    const server = app.listen(PORT, HOST, () => {
+        logger.info(`Server running on ${HOST}:${PORT}`, {
+            env: config.get('env'),
+            nodeVersion: process.version,
+        });
+    });
+
+    return { app, server, metadataService };
+}
+
+// Run and export for testing
+const startupPromise = main().catch((err) => {
+    logger.error('Failed to start server', { error: err.message, stack: err.stack });
+    process.exit(1);
+});
+
+// Lazy exports — resolved after main() completes
+let _app, _server, _metadataService;
+startupPromise.then(({ app, server, metadataService }) => {
+    _app = app;
+    _server = server;
+    _metadataService = metadataService;
 });
 
 // Export for testing
-module.exports = { app, server, metadataService };
+module.exports = {
+    get app() { return _app; },
+    get server() { return _server; },
+    get metadataService() { return _metadataService; },
+};
 
 // Graceful shutdown implementation
 // Requirements: 10.1, 10.2, 10.3, 10.4, 10.5
@@ -105,9 +162,11 @@ async function gracefulShutdown(signal) {
     logger.info(`Received ${signal}, starting graceful shutdown`);
 
     // Stop accepting new connections
-    server.close(() => {
-        logger.info('HTTP server closed - no longer accepting connections');
-    });
+    if (_server) {
+        _server.close(() => {
+            logger.info('HTTP server closed - no longer accepting connections');
+        });
+    }
 
     // Set timeout for forced shutdown (30 seconds)
     const shutdownTimeout = setTimeout(() => {
@@ -116,19 +175,12 @@ async function gracefulShutdown(signal) {
     }, 30000);
 
     try {
-        // Cleanup services
         logger.info('Cleaning up resources...');
 
-        // Clear metadata cache
-        if (metadataService && typeof metadataService.clearCache === 'function') {
-            metadataService.clearCache();
+        if (_metadataService && typeof _metadataService.clearCache === 'function') {
+            _metadataService.clearCache();
             logger.info('Metadata cache cleared');
         }
-
-        // Additional cleanup can be added here
-        // - Close database connections
-        // - Kill child processes
-        // - Clear intervals/timeouts
 
         logger.info('Cleanup completed successfully');
         clearTimeout(shutdownTimeout);

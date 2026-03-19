@@ -42,6 +42,7 @@ class YtdlpProvider {
             "--no-update",                          // Never check for updates (saves ~200-500ms)
             "--no-playlist",                        // Never expand playlists
             "--no-check-certificate",               // Skip SSL handshake overhead
+            "--no-cache-dir",                       // Skip disk cache I/O
             "--socket-timeout", String(this.socketTimeout),
             "--extractor-retries", String(this.extractorRetries),
             "--extractor-args", "youtube:skip=dash,hls", // Skip DASH/HLS format enumeration
@@ -61,8 +62,7 @@ class YtdlpProvider {
 
         return new Promise((resolve, reject) => {
             const args = [
-                "-j",               // Dump JSON, no download
-                "--skip-download",
+                "-j",               // Dump JSON, no download (--skip-download is redundant with -j)
                 "-f", this.audioFormat,
                 ...this.commonFlags(),
                 "--no-write-thumbnail",
@@ -129,7 +129,6 @@ class YtdlpProvider {
 
         const args = [
             "-f", this.audioFormat,
-            "--no-cache-dir",
             "--skip-unavailable-fragments",
             "-o", "-",          // Output to stdout
             ...this.commonFlags(),
