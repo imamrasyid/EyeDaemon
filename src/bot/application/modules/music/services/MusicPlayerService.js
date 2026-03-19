@@ -77,13 +77,12 @@ class MusicPlayerService extends BaseService {
                 }
             }
 
-            // Get track info
-            this.log(`Fetching track info for query: ${query}`, 'info');
-            const trackInfo = await this.musicModel.getTrackInfo(query);
-
-            // Join voice channel
-            this.log(`Joining voice channel: ${voiceChannel.name}`, 'info');
-            await this.voiceManager.join(voiceChannel, textChannel);
+            // Fetch metadata and join voice channel concurrently — saves ~1-2s
+            this.log(`Fetching track info and joining voice channel concurrently`, 'info');
+            const [trackInfo] = await Promise.all([
+                this.musicModel.getTrackInfo(query),
+                this.voiceManager.join(voiceChannel, textChannel),
+            ]);
 
             // Create track object
             const track = {

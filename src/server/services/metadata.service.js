@@ -1,134 +1,123 @@
 /**
  * MetadataService
- * 
- * Service for fetching and caching track metadata from YouTube.
- * Implements LRU cache with TTL expiration to reduce external API calls.
- * 
- * Requirements: 8.1, 8.2, 8.3, 6.3
+ *
+ * Fetches and caches track metadata from YouTube via yt-dlp.
+ *
+ * Improvements:
+ * - In-flight deduplication: concurrent requests for the same query share one yt-dlp spawn
+ * - streamUrl exposed so audio.service can skip a second yt-dlp spawn
+ * - LRU in-memory cache with TTL
  */
 const BaseService = require('./base.service');
 const { NotFoundError } = require('../utils/errors');
 
 class MetadataService extends BaseService {
-    /**
-     * Create a new MetadataService
-     * @param {Object} config - Configuration object
-     * @param {Object} dependencies - Dependencies (ytdlpProvider)
-     */
     constructor(config, dependencies) {
         super(config, dependencies);
         this.ytdlpProvider = dependencies.ytdlpProvider;
+
+        // LRU cache: key → { value, timestamp }
         this.cache = new Map();
-        this.cacheTTL = config.get('cache.ttl', 600000); // 10 minutes default
+        this.cacheTTL = config.get('cache.ttl', 600000);       // 10 min
         this.maxCacheSize = config.get('cache.maxSize', 1000);
+
+        // In-flight deduplication: key → Promise
+        // If two requests arrive for the same query simultaneously, the second
+        // one awaits the same Promise instead of spawning a second yt-dlp process.
+        this.inFlight = new Map();
     }
 
     /**
-     * Get track information for a query
-     * @param {string} query - Search query or URL
-     * @returns {Promise<Object>} Track information
-     * @throws {NotFoundError} If no results found
+     * Get track information for a query.
+     * @param {string} query - Search query or YouTube URL
+     * @returns {Promise<Object>} Track information (includes streamUrl)
      */
     async getTrackInfo(query) {
-        const startTime = Date.now();
-
-        // Check cache first
+        // 1. Cache hit
         const cached = this.getFromCache(query);
         if (cached) {
             this.log('debug', 'Cache hit for metadata', { query });
             return cached;
         }
 
+        // 2. In-flight deduplication — reuse existing fetch if one is running
+        if (this.inFlight.has(query)) {
+            this.log('debug', 'Reusing in-flight metadata request', { query });
+            return this.inFlight.get(query);
+        }
+
+        // 3. Start new fetch and register it as in-flight
+        const fetchPromise = this._fetchAndCache(query).finally(() => {
+            this.inFlight.delete(query);
+        });
+
+        this.inFlight.set(query, fetchPromise);
+        return fetchPromise;
+    }
+
+    /**
+     * @private
+     */
+    async _fetchAndCache(query) {
+        const startTime = Date.now();
         this.log('info', 'Fetching metadata', { query });
 
         try {
-            // Fetch from yt-dlp provider
             const metadata = await this.ytdlpProvider.getMetadata(query);
 
             if (!metadata) {
                 throw new NotFoundError(`No results found for: ${query}`);
             }
 
-            // Transform data to consistent format (backward compatible)
             const trackInfo = {
                 title: metadata.title,
                 url: metadata.webpage_url || metadata.url,
                 durationSec: Number(metadata.duration || 0),
                 thumbnail: metadata.thumbnail || metadata.thumbnails?.pop()?.url || null,
                 uploader: metadata.uploader || 'Unknown',
+                // Direct CDN URL — lets audio.service skip a second yt-dlp spawn.
+                // YouTube CDN URLs are valid for ~6h but we only cache for 10 min,
+                // so expiry is not a concern in normal usage.
+                streamUrl: metadata.streamUrl || null,
             };
 
-            // Cache the result
             this.setCache(query, trackInfo);
 
-            const duration = Date.now() - startTime;
-            this.log('info', 'Metadata fetched successfully', { query, duration });
-
+            this.log('info', 'Metadata fetched successfully', { query, duration: Date.now() - startTime });
             return trackInfo;
         } catch (error) {
             this.handleError(error, 'getTrackInfo');
         }
     }
 
-    /**
-     * Get value from cache if not expired
-     * @param {string} key - Cache key
-     * @returns {Object|null} Cached value or null
-     */
     getFromCache(key) {
         const entry = this.cache.get(key);
         if (!entry) return null;
 
-        // Check if expired
         if (Date.now() - entry.timestamp > this.cacheTTL) {
             this.cache.delete(key);
-            this.log('debug', 'Cache entry expired', { key });
             return null;
         }
 
         return entry.value;
     }
 
-    /**
-     * Set value in cache with LRU eviction
-     * @param {string} key - Cache key
-     * @param {Object} value - Value to cache
-     */
     setCache(key, value) {
-        // Implement simple LRU: if cache is full, remove oldest entry
         if (this.cache.size >= this.maxCacheSize) {
-            const firstKey = this.cache.keys().next().value;
-            this.cache.delete(firstKey);
-            this.log('debug', 'Cache eviction (LRU)', { evictedKey: firstKey });
+            // Evict oldest (first inserted) entry
+            this.cache.delete(this.cache.keys().next().value);
         }
-
-        this.cache.set(key, {
-            value,
-            timestamp: Date.now(),
-        });
-
-        this.log('debug', 'Cache entry set', { key, cacheSize: this.cache.size });
+        this.cache.set(key, { value, timestamp: Date.now() });
     }
 
-    /**
-     * Clear all cache entries
-     */
     clearCache() {
         const size = this.cache.size;
         this.cache.clear();
         this.log('info', 'Cache cleared', { entriesCleared: size });
     }
 
-    /**
-     * Get cache statistics
-     * @returns {Object} Cache stats
-     */
     getCacheStats() {
-        return {
-            size: this.cache.size,
-            maxSize: this.maxCacheSize,
-            ttl: this.cacheTTL,
-        };
+        return { size: this.cache.size, maxSize: this.maxCacheSize, ttl: this.cacheTTL };
     }
 }
 

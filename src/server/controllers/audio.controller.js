@@ -30,15 +30,20 @@ class AudioController extends BaseController {
             const { query, start = 0, filter = 'none' } = req.query;
 
             const audioService = this.getService('audioService');
+            const metadataService = this.getService('metadataService');
 
             // Set response headers for audio streaming
             res.setHeader('Content-Type', 'audio/webm');
             res.setHeader('Transfer-Encoding', 'chunked');
             res.setHeader('Cache-Control', 'no-store');
 
-            // Stream audio through the service
+            // Try to get cached streamUrl to avoid a second yt-dlp spawn
+            const cached = metadataService.getFromCache(query);
+            const streamUrl = cached?.streamUrl || null;
+
             await audioService.streamAudio({
                 query,
+                streamUrl,
                 start: Number(start),
                 filter,
                 response: res,

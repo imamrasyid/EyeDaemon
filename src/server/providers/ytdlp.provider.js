@@ -2,6 +2,9 @@ const { spawn } = require("child_process");
 const { ProviderError } = require("../utils/errors");
 const logger = require("../utils/logger");
 
+// Regex to detect YouTube URLs — skip ytsearch prefix for direct URLs
+const YOUTUBE_URL_REGEX = /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//;
+
 /**
  * YtdlpProvider - Wrapper for yt-dlp operations
  * Handles metadata fetching and audio stream extraction from YouTube
@@ -10,163 +13,167 @@ class YtdlpProvider {
     constructor(config) {
         this.config = config;
         this.ytdlpPath = config.get("ytdlpPath", "yt-dlp");
-        this.timeout = config.get("ytdlpTimeout", 30000); // Reduced to 30s for faster failures
+        this.timeout = config.get("ytdlpTimeout", 30000);
 
-        // Optimized audio format preferences (quality vs speed)
-        // 251: WebM Opus 160kbps (best quality, small size)
-        // 140: M4A AAC 128kbps (good quality, widely compatible)
-        // bestaudio: fallback
-        this.audioFormat = config.get("audioFormat", "251/140/bestaudio[ext=m4a]/bestaudio");
+        // Prefer WebM/Opus (format 251) for direct streaming — no ffmpeg needed.
+        // Fall back to any WebM audio, then best available.
+        this.audioFormat = config.get("audioFormat", "251/bestaudio[ext=webm]/bestaudio");
 
-        // Performance optimization flags
-        this.socketTimeout = config.get("socketTimeout", 10); // 10 seconds
-        this.extractorRetries = config.get("extractorRetries", 3);
+        // Performance flags
+        this.socketTimeout = config.get("socketTimeout", 10);
+        this.extractorRetries = config.get("extractorRetries", 2);
     }
 
     /**
-     * Get metadata for a search query or URL
+     * Resolve input string — direct URL or ytsearch prefix
+     * @param {string} query
+     * @returns {string}
+     */
+    resolveInput(query) {
+        return YOUTUBE_URL_REGEX.test(query) ? query : `ytsearch1:${query}`;
+    }
+
+    /**
+     * Common yt-dlp performance flags shared by all invocations
+     * @returns {string[]}
+     */
+    commonFlags() {
+        return [
+            "--no-update",                          // Never check for updates (saves ~200-500ms)
+            "--no-playlist",                        // Never expand playlists
+            "--no-check-certificate",               // Skip SSL handshake overhead
+            "--socket-timeout", String(this.socketTimeout),
+            "--extractor-retries", String(this.extractorRetries),
+            "--extractor-args", "youtube:skip=dash,hls", // Skip DASH/HLS format enumeration
+            "--no-warnings",
+            "--quiet",
+        ];
+    }
+
+    /**
+     * Get metadata for a search query or URL.
+     * Also returns the direct stream URL so callers can avoid a second yt-dlp spawn.
      * @param {string} query - Search query or YouTube URL
-     * @returns {Promise<Object>} Metadata object
+     * @returns {Promise<Object>} Metadata object (includes streamUrl)
      */
     async getMetadata(query) {
-        const input = `ytsearch1:${query}`;
+        const input = this.resolveInput(query);
 
         return new Promise((resolve, reject) => {
             const args = [
-                "-j", // JSON output
-                "--no-playlist", // Skip playlist processing (CRITICAL for speed)
-                "--flat-playlist", // Don't extract playlist info
-                "--no-warnings",
-                "--quiet",
-                "--skip-download", // Only get metadata
-                "-f", this.audioFormat, // Use optimized format
-                "--socket-timeout", String(this.socketTimeout), // Fast timeout
-                "--extractor-retries", String(this.extractorRetries), // Limited retries
-                "--no-check-certificate", // Skip SSL verification (faster)
-                "--skip-unavailable-fragments", // Skip broken fragments
-                "--no-write-thumbnail", // Don't download thumbnail
-                "--no-write-description", // Don't write description file
-                "--no-write-info-json", // Don't write info json file
+                "-j",               // Dump JSON, no download
+                "--skip-download",
+                "-f", this.audioFormat,
+                ...this.commonFlags(),
+                "--no-write-thumbnail",
+                "--no-write-description",
+                "--no-write-info-json",
                 input,
             ];
 
-            logger.debug("Spawning yt-dlp for metadata", { query, args });
+            logger.debug("Spawning yt-dlp for metadata", { query });
 
-            const process = spawn(this.ytdlpPath, args);
-
+            const proc = spawn(this.ytdlpPath, args);
             let output = "";
             let errorOutput = "";
 
-            process.stdout.on("data", (data) => {
-                output += data.toString();
-            });
-
-            process.stderr.on("data", (data) => {
-                errorOutput += data.toString();
-            });
+            proc.stdout.on("data", (data) => { output += data.toString(); });
+            proc.stderr.on("data", (data) => { errorOutput += data.toString(); });
 
             const timeoutId = setTimeout(() => {
                 logger.warn("yt-dlp metadata timeout", { query });
-                process.kill("SIGTERM");
+                proc.kill("SIGTERM");
                 reject(new ProviderError("yt-dlp timeout"));
             }, this.timeout);
 
-            process.on("close", (code) => {
+            proc.on("close", (code) => {
                 clearTimeout(timeoutId);
 
                 if (code !== 0) {
-                    logger.error("yt-dlp failed", { code, error: errorOutput, query });
+                    logger.error("yt-dlp metadata failed", { code, error: errorOutput, query });
                     return reject(new ProviderError(`yt-dlp failed: ${errorOutput}`));
                 }
 
                 try {
                     const data = JSON.parse(output);
                     const result = data.entries?.[0] || data;
+
+                    // Attach the best direct stream URL so audio.service can stream
+                    // without spawning yt-dlp a second time
+                    result.streamUrl = result.url || result.webpage_url;
+
                     logger.debug("yt-dlp metadata fetched", { query, title: result.title });
                     resolve(result);
-                } catch (error) {
-                    logger.error("Failed to parse yt-dlp metadata", { error: error.message, output });
+                } catch (err) {
+                    logger.error("Failed to parse yt-dlp metadata", { error: err.message });
                     reject(new ProviderError("Failed to parse metadata"));
                 }
             });
 
-            process.on("error", (error) => {
+            proc.on("error", (err) => {
                 clearTimeout(timeoutId);
-                logger.error("yt-dlp spawn error", { error: error.message, query });
-                reject(new ProviderError(`yt-dlp spawn error: ${error.message}`));
+                logger.error("yt-dlp spawn error", { error: err.message, query });
+                reject(new ProviderError(`yt-dlp spawn error: ${err.message}`));
             });
         });
     }
 
     /**
-     * Get audio stream for a search query or URL
+     * Get audio stream for a search query or URL.
+     * Spawns yt-dlp and pipes stdout directly — used when no pre-fetched URL is available.
      * @param {string} query - Search query or YouTube URL
-     * @returns {ReadableStream} Audio stream
+     * @returns {ReadableStream}
      */
     async getAudioStream(query) {
-        const input = `ytsearch1:${query}`;
+        const input = this.resolveInput(query);
 
         const args = [
             "-f", this.audioFormat,
             "--no-cache-dir",
-            "--no-playlist",
-            "--socket-timeout", String(this.socketTimeout),
-            "--extractor-retries", String(this.extractorRetries),
-            "--no-check-certificate",
             "--skip-unavailable-fragments",
-            "-o", "-",
-            "--quiet",
-            "--no-warnings",
+            "-o", "-",          // Output to stdout
+            ...this.commonFlags(),
             input,
         ];
 
-        logger.debug("Spawning yt-dlp for audio stream", { query, args });
+        logger.debug("Spawning yt-dlp for audio stream", { query });
 
-        const process = spawn(this.ytdlpPath, args);
+        const proc = spawn(this.ytdlpPath, args);
 
-        // Setup initial timeout (only for stream start, not entire duration)
+        // Timeout only covers stream start — not the full duration
         let timeoutId = setTimeout(() => {
-            logger.warn("yt-dlp stream failed to start within timeout", { query, timeout: this.timeout });
-            process.kill("SIGTERM");
+            logger.warn("yt-dlp stream start timeout", { query });
+            proc.kill("SIGTERM");
         }, this.timeout);
 
-        // Clear timeout once stream starts flowing
         let streamStarted = false;
-        process.stdout.once("data", () => {
+        proc.stdout.once("data", () => {
             if (!streamStarted) {
                 streamStarted = true;
                 clearTimeout(timeoutId);
-                logger.debug("yt-dlp stream started successfully", { query });
+                logger.debug("yt-dlp stream started", { query });
             }
         });
 
-        process.on("close", (code) => {
+        proc.on("close", (code) => {
             clearTimeout(timeoutId);
             if (code !== 0 && code !== null) {
-                logger.error("yt-dlp stream process closed with error", { code, query });
-            } else if (streamStarted) {
-                logger.debug("yt-dlp stream completed", { query });
+                logger.error("yt-dlp stream closed with error", { code, query });
             }
         });
 
-        process.on("error", (error) => {
+        proc.on("error", (err) => {
             clearTimeout(timeoutId);
-            logger.error("yt-dlp stream spawn error", { error: error.message, query });
+            logger.error("yt-dlp stream spawn error", { error: err.message, query });
         });
 
-        // Log stderr for debugging
         let errorOutput = "";
-        process.stderr.on("data", (data) => {
-            errorOutput += data.toString();
+        proc.stderr.on("data", (data) => { errorOutput += data.toString(); });
+        proc.stderr.on("end", () => {
+            if (errorOutput) logger.debug("yt-dlp stderr", { error: errorOutput, query });
         });
 
-        process.stderr.on("end", () => {
-            if (errorOutput) {
-                logger.debug("yt-dlp stderr output", { error: errorOutput, query });
-            }
-        });
-
-        return process.stdout;
+        return proc.stdout;
     }
 }
 
