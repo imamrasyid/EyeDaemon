@@ -131,7 +131,8 @@ function createMusicControlButtons(guildId, playerService, queue) {
         new ButtonBuilder().setCustomId('music_skip').setEmoji('⏭️').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('music_stop').setEmoji('⏹️').setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId('music_loop').setEmoji(loopEmoji).setStyle(loopStyle),
-        new ButtonBuilder().setCustomId('music_volume_down').setEmoji('🔉').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('music_volume_down').setEmoji('🔉').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('music_volume_up').setEmoji('🔊').setStyle(ButtonStyle.Secondary)
     );
 }
 

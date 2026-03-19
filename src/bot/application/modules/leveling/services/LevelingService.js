@@ -25,10 +25,11 @@ class LevelingService extends BaseService {
     async initialize() {
         await super.initialize();
 
-        // Load the leveling model
-        const Loader = require('../../../../system/core/Loader');
-        const loader = new Loader(this.client);
-        this.levelingModel = loader.model('LevelingModel');
+        // Load the leveling model using client.loader (consistent with other services)
+        const loader = this.client.loader;
+        if (loader) {
+            this.levelingModel = loader.model('LevelingModel');
+        }
 
         this.log('LevelingService initialized', 'info');
     }

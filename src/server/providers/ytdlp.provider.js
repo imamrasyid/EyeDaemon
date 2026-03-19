@@ -107,14 +107,14 @@ class YtdlpProvider {
         const input = `ytsearch1:${query}`;
 
         const args = [
-            "-f", this.audioFormat, // Use optimized format (high quality, fast)
-            "--no-cache-dir", // Don't use cache
-            "--no-playlist", // Skip playlist processing
-            "--socket-timeout", String(this.socketTimeout), // Fast timeout
-            "--extractor-retries", String(this.extractorRetries), // Limited retries
-            "--no-check-certificate", // Skip SSL verification
-            "--skip-unavailable-fragments", // Skip broken fragments
-            "-o", "-", // Output to stdout
+            "-f", this.audioFormat,
+            "--no-cache-dir",
+            "--no-playlist",
+            "--socket-timeout", String(this.socketTimeout),
+            "--extractor-retries", String(this.extractorRetries),
+            "--no-check-certificate",
+            "--skip-unavailable-fragments",
+            "-o", "-",
             "--quiet",
             "--no-warnings",
             input,

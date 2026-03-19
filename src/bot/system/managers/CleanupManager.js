@@ -103,17 +103,14 @@ class CleanupManager {
                 }
             }
 
-            // Cleanup MusicModel track cache
+            // Cleanup MusicModel track cache (DB-backed, uses clearExpiredCache)
             const musicModule = this.client.modules.get('music');
             if (musicModule && this.client.loader) {
                 try {
                     const musicModel = this.client.loader.model('MusicModel');
-                    if (musicModel && musicModel.trackCache) {
-                        const removed = musicModel.trackCache.cleanup();
-                        totalRemoved += removed;
-
-                        const stats = musicModel.getCacheStats();
-                        this.log(`Track cache: ${stats.size} entries, ${stats.hitRate} hit rate`, 'debug');
+                    if (musicModel && typeof musicModel.clearExpiredCache === 'function') {
+                        await musicModel.clearExpiredCache();
+                        this.log('MusicModel expired track cache cleared', 'debug');
                     }
                 } catch (error) {
                     this.log(`Error cleaning up MusicModel cache: ${error.message}`, 'debug');
@@ -226,9 +223,15 @@ class CleanupManager {
         }
 
         // Add track cache stats if available
-        const musicModel = this.client.loader.model('MusicModel');
-        if (musicModel && musicModel.trackCache) {
-            stats.trackCache = musicModel.getCacheStats();
+        if (this.client.loader) {
+            try {
+                const musicModel = this.client.loader.model('MusicModel');
+                if (musicModel) {
+                    stats.trackCache = musicModel.getCacheStats();
+                }
+            } catch (error) {
+                // MusicModel may not be available
+            }
         }
 
         // Add game stats if available

@@ -34,9 +34,10 @@ class ShopService extends BaseService {
      * @param {number} price - Item price
      * @param {number} stock - Item stock (-1 for unlimited)
      * @param {string} roleId - Role ID to give on purchase (optional)
+     * @param {string} itemType - Item type (default: 'general')
      * @returns {Promise<Object>} Created item
      */
-    async createItem(guildId, name, description, price, stock = -1, roleId = null) {
+    async createItem(guildId, name, description, price, stock = -1, roleId = null, itemType = 'general') {
         this.validateRequired({ guildId, name, description, price }, ['guildId', 'name', 'description', 'price']);
 
         if (price < 0) {
@@ -45,11 +46,12 @@ class ShopService extends BaseService {
 
         try {
             const itemId = `${guildId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+            const now = Date.now();
 
             await this.query(
-                `INSERT INTO shop_items (id, guild_id, name, description, price, stock, role_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-                [itemId, guildId, name, description, price, stock, roleId, Date.now()]
+                `INSERT INTO shop_items (id, guild_id, name, description, price, item_type, stock, role_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [itemId, guildId, name, description, price, itemType, stock, roleId, now, now]
             );
 
             this.log(`Created shop item ${name} in guild ${guildId}`, 'info');
@@ -61,7 +63,8 @@ class ShopService extends BaseService {
                 description,
                 price,
                 stock,
-                roleId
+                roleId,
+                itemType
             };
         } catch (error) {
             throw this.handleError(error, 'createItem', { guildId, name, price });
@@ -266,35 +269,24 @@ class ShopService extends BaseService {
      */
     async addToInventory(userId, guildId, itemId, quantity) {
         try {
-            // Get member ID
-            const memberResult = await this.query(
-                'SELECT id FROM members WHERE user_id = ? AND guild_id = ?',
-                [userId, guildId]
-            );
-
-            if (!memberResult || memberResult.length === 0) {
-                throw new Error('Member not found');
-            }
-
-            const memberId = memberResult[0].id;
-
             // Check if item already in inventory
             const existing = await this.query(
-                'SELECT quantity FROM inventory WHERE member_id = ? AND item_id = ?',
-                [memberId, itemId]
+                'SELECT quantity FROM user_inventories WHERE guild_id = ? AND user_id = ? AND item_id = ?',
+                [guildId, userId, itemId]
             );
 
             if (existing && existing.length > 0) {
                 // Update quantity
                 await this.query(
-                    'UPDATE inventory SET quantity = quantity + ? WHERE member_id = ? AND item_id = ?',
-                    [quantity, memberId, itemId]
+                    'UPDATE user_inventories SET quantity = quantity + ? WHERE guild_id = ? AND user_id = ? AND item_id = ?',
+                    [quantity, guildId, userId, itemId]
                 );
             } else {
                 // Insert new
+                const invId = `${guildId}-${userId}-${itemId}-${Date.now()}`;
                 await this.query(
-                    'INSERT INTO inventory (member_id, item_id, quantity, purchased_at) VALUES (?, ?, ?, ?)',
-                    [memberId, itemId, quantity, Date.now()]
+                    'INSERT INTO user_inventories (id, guild_id, user_id, item_id, quantity, acquired_at) VALUES (?, ?, ?, ?, ?, ?)',
+                    [invId, guildId, userId, itemId, quantity, Date.now()]
                 );
             }
 
@@ -314,26 +306,14 @@ class ShopService extends BaseService {
         this.validateRequired({ userId, guildId }, ['userId', 'guildId']);
 
         try {
-            // Get member ID
-            const memberResult = await this.query(
-                'SELECT id FROM members WHERE user_id = ? AND guild_id = ?',
-                [userId, guildId]
-            );
-
-            if (!memberResult || memberResult.length === 0) {
-                return [];
-            }
-
-            const memberId = memberResult[0].id;
-
             // Get inventory with item details
             const inventory = await this.query(
-                `SELECT i.quantity, i.purchased_at, s.id, s.name, s.description, s.price, s.role_id
-                FROM inventory i
+                `SELECT i.quantity, i.acquired_at, s.id, s.name, s.description, s.price, s.role_id
+                FROM user_inventories i
                 JOIN shop_items s ON i.item_id = s.id
-                WHERE i.member_id = ?
-                ORDER BY i.purchased_at DESC`,
-                [memberId]
+                WHERE i.guild_id = ? AND i.user_id = ?
+                ORDER BY i.acquired_at DESC`,
+                [guildId, userId]
             );
 
             return inventory || [];
@@ -358,22 +338,10 @@ class ShopService extends BaseService {
         }
 
         try {
-            // Get member ID
-            const memberResult = await this.query(
-                'SELECT id FROM members WHERE user_id = ? AND guild_id = ?',
-                [userId, guildId]
-            );
-
-            if (!memberResult || memberResult.length === 0) {
-                throw new Error('Member not found');
-            }
-
-            const memberId = memberResult[0].id;
-
             // Check current quantity
             const existing = await this.query(
-                'SELECT quantity FROM inventory WHERE member_id = ? AND item_id = ?',
-                [memberId, itemId]
+                'SELECT quantity FROM user_inventories WHERE guild_id = ? AND user_id = ? AND item_id = ?',
+                [guildId, userId, itemId]
             );
 
             if (!existing || existing.length === 0) {
@@ -389,14 +357,14 @@ class ShopService extends BaseService {
             if (currentQuantity === quantity) {
                 // Remove completely
                 await this.query(
-                    'DELETE FROM inventory WHERE member_id = ? AND item_id = ?',
-                    [memberId, itemId]
+                    'DELETE FROM user_inventories WHERE guild_id = ? AND user_id = ? AND item_id = ?',
+                    [guildId, userId, itemId]
                 );
             } else {
                 // Decrease quantity
                 await this.query(
-                    'UPDATE inventory SET quantity = quantity - ? WHERE member_id = ? AND item_id = ?',
-                    [quantity, memberId, itemId]
+                    'UPDATE user_inventories SET quantity = quantity - ? WHERE guild_id = ? AND user_id = ? AND item_id = ?',
+                    [quantity, guildId, userId, itemId]
                 );
             }
 

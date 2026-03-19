@@ -432,7 +432,24 @@ module.exports = {
             FOREIGN KEY (moderator_id) REFERENCES user_profiles(user_id) ON DELETE SET NULL
         )`);
 
-        // ticketing
+        // infractions (used by InfractionService)
+        await db.query(`CREATE TABLE IF NOT EXISTS infractions (
+            id TEXT PRIMARY KEY,
+            guild_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            moderator_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            duration INTEGER,
+            expires_at INTEGER,
+            FOREIGN KEY (guild_id) REFERENCES guilds(guild_id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE,
+            FOREIGN KEY (moderator_id) REFERENCES user_profiles(user_id) ON DELETE SET NULL
+        )`);
+        await db.query('CREATE INDEX IF NOT EXISTS idx_infractions_guild_user ON infractions(guild_id, user_id)');
+        await db.query('CREATE INDEX IF NOT EXISTS idx_infractions_type ON infractions(guild_id, type)');
+        await db.query('CREATE INDEX IF NOT EXISTS idx_infractions_expires ON infractions(expires_at)');
         await db.query(`CREATE TABLE IF NOT EXISTS ticket_categories (
             id TEXT PRIMARY KEY,
             guild_id TEXT NOT NULL,
@@ -453,6 +470,8 @@ module.exports = {
             channel_id TEXT NOT NULL UNIQUE,
             user_id TEXT NOT NULL,
             category_id TEXT NOT NULL,
+            ticket_number INTEGER NOT NULL DEFAULT 0,
+            description TEXT,
             status TEXT DEFAULT 'open',
             claimed_by TEXT,
             priority TEXT DEFAULT 'normal',
@@ -461,65 +480,65 @@ module.exports = {
             closed_at INTEGER,
             FOREIGN KEY (guild_id) REFERENCES guilds(guild_id) ON DELETE CASCADE,
             FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE,
-            FOREIGN KEY (category_id) REFERENCES ticket_categories(id) ON DELETE CASCADE,
             FOREIGN KEY (claimed_by) REFERENCES user_profiles(user_id) ON DELETE SET NULL
         )`);
-
-        await db.query(`CREATE TABLE IF NOT EXISTS ticket_messages (
+        await db.query('CREATE INDEX IF NOT EXISTS idx_tickets_guild ON tickets(guild_id)');
+        await db.query('CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id)');
+        await db.query('CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(guild_id, status)');
             id TEXT PRIMARY KEY,
             ticket_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            message_id TEXT NOT NULL,
-            content TEXT NOT NULL,
-            attachments JSON DEFAULT '[]',
-            created_at INTEGER NOT NULL,
-            FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE,
-            FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
+                user_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                            attachments JSON DEFAULT '[]',
+                                created_at INTEGER NOT NULL,
+                                    FOREIGN KEY(ticket_id) REFERENCES tickets(id) ON DELETE CASCADE,
+                                        FOREIGN KEY(user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
         )`);
 
         // roles
-        await db.query(`CREATE TABLE IF NOT EXISTS reaction_roles (
-            id TEXT PRIMARY KEY,
-            guild_id TEXT NOT NULL,
-            message_id TEXT NOT NULL,
-            channel_id TEXT NOT NULL,
-            emoji TEXT NOT NULL,
-            role_id TEXT NOT NULL,
-            description TEXT,
-            created_at INTEGER NOT NULL,
-            FOREIGN KEY (guild_id) REFERENCES guilds(guild_id) ON DELETE CASCADE,
-            UNIQUE(message_id, emoji)
-        )`);
+        await db.query(`CREATE TABLE IF NOT EXISTS reaction_roles(
+                                            id TEXT PRIMARY KEY,
+                                            guild_id TEXT NOT NULL,
+                                            message_id TEXT NOT NULL,
+                                            channel_id TEXT NOT NULL,
+                                            emoji TEXT NOT NULL,
+                                            role_id TEXT NOT NULL,
+                                            description TEXT,
+                                            created_at INTEGER NOT NULL,
+                                            FOREIGN KEY(guild_id) REFERENCES guilds(guild_id) ON DELETE CASCADE,
+                                            UNIQUE(message_id, emoji)
+                                        )`);
 
-        await db.query(`CREATE TABLE IF NOT EXISTS auto_roles (
-            id TEXT PRIMARY KEY,
-            guild_id TEXT NOT NULL,
-            role_id TEXT NOT NULL,
-            condition_type TEXT NOT NULL,
-            condition_data JSON DEFAULT '{}',
-            is_active BOOLEAN DEFAULT TRUE,
-            created_at INTEGER NOT NULL,
-            FOREIGN KEY (guild_id) REFERENCES guilds(guild_id) ON DELETE CASCADE
-        )`);
+        await db.query(`CREATE TABLE IF NOT EXISTS auto_roles(
+                                            id TEXT PRIMARY KEY,
+                                            guild_id TEXT NOT NULL,
+                                            role_id TEXT NOT NULL,
+                                            condition_type TEXT NOT NULL,
+                                            condition_data JSON DEFAULT '{}',
+                                            is_active BOOLEAN DEFAULT TRUE,
+                                            created_at INTEGER NOT NULL,
+                                            FOREIGN KEY(guild_id) REFERENCES guilds(guild_id) ON DELETE CASCADE
+                                        )`);
 
         // cache
-        await db.query(`CREATE TABLE IF NOT EXISTS cache_entries (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            expires_at INTEGER NOT NULL,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        )`);
+        await db.query(`CREATE TABLE IF NOT EXISTS cache_entries(
+                                            key TEXT PRIMARY KEY,
+                                            value TEXT NOT NULL,
+                                            expires_at INTEGER NOT NULL,
+                                            created_at INTEGER NOT NULL,
+                                            updated_at INTEGER NOT NULL
+                                        )`);
         await db.query('CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache_entries(expires_at)');
 
         // distributed locks
-        await db.query(`CREATE TABLE IF NOT EXISTS distributed_locks (
-            lock_key TEXT PRIMARY KEY,
-            lock_token TEXT NOT NULL,
-            acquired_at INTEGER NOT NULL,
-            expires_at INTEGER NOT NULL,
-            owner_id TEXT NOT NULL
-        )`);
+        await db.query(`CREATE TABLE IF NOT EXISTS distributed_locks(
+                                            lock_key TEXT PRIMARY KEY,
+                                            lock_token TEXT NOT NULL,
+                                            acquired_at INTEGER NOT NULL,
+                                            expires_at INTEGER NOT NULL,
+                                            owner_id TEXT NOT NULL
+                                        )`);
         await db.query('CREATE INDEX IF NOT EXISTS idx_locks_expires ON distributed_locks(expires_at)');
         await db.query('CREATE INDEX IF NOT EXISTS idx_locks_owner ON distributed_locks(owner_id)');
     },
@@ -529,7 +548,7 @@ module.exports = {
             'cache_entries', 'distributed_locks',
             'auto_roles', 'reaction_roles',
             'ticket_messages', 'tickets', 'ticket_categories',
-            'user_warnings', 'moderation_config', 'automod_config', 'moderation_logs', 'warnings',
+            'user_warnings', 'moderation_config', 'automod_config', 'moderation_logs', 'warnings', 'infractions',
             'message_logs',
             'track_metadata_cache', 'music_queue_tracks', 'music_queue_state',
             'music_playlist_tracks', 'music_playlists',
@@ -542,7 +561,7 @@ module.exports = {
             'user_profiles', 'guilds'
         ];
         for (const tbl of tables) {
-            await db.query(`DROP TABLE IF EXISTS ${tbl}`);
+            await db.query(`DROP TABLE IF EXISTS ${ tbl } `);
         }
     }
 };

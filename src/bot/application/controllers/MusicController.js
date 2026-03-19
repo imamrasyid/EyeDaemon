@@ -459,8 +459,8 @@ class MusicController extends Controller {
                 return;
             }
 
-            // Remove track using service
-            const removed = await this.musicPlayerService.removeTrack(guildId, position - 1);
+            // Remove track using service (QueueManager.remove is 1-based)
+            const removed = await this.musicPlayerService.removeTrack(guildId, position);
 
             if (removed) {
                 await interaction.reply(`🗑️ Removed **${removed.title}** from queue`);
@@ -491,8 +491,8 @@ class MusicController extends Controller {
                 return;
             }
 
-            // Jump to track using service
-            const track = await this.musicPlayerService.jumpTo(guildId, position - 1);
+            // Jump to track using service (QueueManager.skipTo is 1-based)
+            const track = await this.musicPlayerService.jumpTo(guildId, position);
 
             if (track) {
                 await interaction.reply(`⏭️ Jumped to **${track.title}**`);
@@ -524,8 +524,8 @@ class MusicController extends Controller {
                 return;
             }
 
-            // Move track using service
-            const success = await this.musicPlayerService.moveTrack(guildId, from - 1, to - 1);
+            // Move track using service (QueueManager.move is 1-based)
+            const success = await this.musicPlayerService.moveTrack(guildId, from, to);
 
             if (success) {
                 await interaction.reply(`↔️ Moved track from position **${from}** to **${to}**`);
@@ -579,7 +579,8 @@ class MusicController extends Controller {
                 return;
             }
 
-            if (seconds > current.duration) {
+            // current.duration is in milliseconds, convert seconds to ms for comparison
+            if (seconds * 1000 > current.duration) {
                 await interaction.editReply({ content: `❌ Time exceeds track duration (${this.formatDuration(current.duration)})` });
                 return;
             }
@@ -982,12 +983,7 @@ class MusicController extends Controller {
                 new ButtonBuilder()
                     .setCustomId('music_volume_down')
                     .setEmoji('🔉')
-                    .setStyle(ButtonStyle.Secondary)
-            );
-
-        // Create second row for volume up (if needed, we can add more buttons later)
-        const row2 = new ActionRowBuilder()
-            .addComponents(
+                    .setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder()
                     .setCustomId('music_volume_up')
                     .setEmoji('🔊')

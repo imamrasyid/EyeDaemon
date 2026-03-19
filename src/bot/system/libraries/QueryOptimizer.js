@@ -236,9 +236,8 @@ class QueryOptimizer {
             sql: `
                 SELECT 
                     p.*,
-                    (SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = p.id) as track_count,
-                    (SELECT SUM(track_duration) FROM playlist_tracks WHERE playlist_id = p.id) as total_duration
-                FROM user_playlists p
+                    (SELECT COUNT(*) FROM music_playlist_tracks WHERE playlist_id = p.id) as track_count
+                FROM music_playlists p
                 WHERE p.id = ?
                 LIMIT 1
             `,

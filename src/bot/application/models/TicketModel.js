@@ -19,15 +19,34 @@ class TicketModel extends Model {
     }
 
     /**
+     * Get the next ticket number for a guild
+     * @param {string} guildId - Guild ID
+     * @returns {Promise<number>} Next ticket number
+     */
+    async getNextTicketNumber(guildId) {
+        try {
+            const result = await this.queryOne(
+                `SELECT MAX(ticket_number) as max_num FROM tickets WHERE guild_id = ?`,
+                [guildId]
+            );
+            return (result?.max_num || 0) + 1;
+        } catch (error) {
+            this.log(`Error getting next ticket number: ${error.message}`, 'error');
+            throw error;
+        }
+    }
+
+    /**
      * Create a new ticket
      * @param {string} guildId - Guild ID
      * @param {string} userId - User ID
      * @param {string} channelId - Channel ID
-     * @param {string} categoryId - Ticket category ID
-     * @param {string} priority - Ticket priority (low, normal, high, urgent)
+     * @param {string} category - Ticket category string
+     * @param {string|null} description - Ticket description
+     * @param {number} ticketNumber - Ticket number
      * @returns {Promise<Object>} Ticket information
      */
-    async createTicket(guildId, userId, channelId, categoryId, priority = 'normal') {
+    async createTicket(guildId, userId, channelId, category, description, ticketNumber) {
         try {
             const ticketId = uuidv4();
             const now = Math.floor(Date.now() / 1000);
@@ -37,25 +56,28 @@ class TicketModel extends Model {
                 guild_id: guildId,
                 channel_id: channelId,
                 user_id: userId,
-                category_id: categoryId,
+                category_id: category,
+                ticket_number: ticketNumber,
+                description: description || null,
                 status: 'open',
                 claimed_by: null,
-                priority: priority,
+                priority: 'normal',
                 created_at: now,
                 claimed_at: null,
                 closed_at: null
             });
 
-            this.log(`Created ticket ${ticketId} for user ${userId}`, 'info');
+            this.log(`Created ticket #${ticketNumber} (${ticketId}) for user ${userId}`, 'info');
 
             return {
                 id: ticketId,
+                ticket_number: ticketNumber,
                 guildId,
                 userId,
                 channelId,
-                categoryId,
+                category,
+                description,
                 status: 'open',
-                priority,
                 createdAt: now
             };
         } catch (error) {

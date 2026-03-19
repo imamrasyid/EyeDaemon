@@ -97,8 +97,9 @@ class AudioPlayer {
             // Use original query if available, otherwise use URL
             const query = track.query || track.url;
             const stream = await this.getAudioStream(query, filter, position);
+            // WebM/Opus stream from server — use WebmOpus to skip ffmpeg transcoding entirely
             return createAudioResource(stream, {
-                inputType: StreamType.Arbitrary,
+                inputType: StreamType.WebmOpus,
                 inlineVolume: true,
             });
         } catch (error) {

@@ -372,8 +372,9 @@ class MusicPlayerService extends BaseService {
                 throw new Error('Position cannot be negative');
             }
 
-            if (position > current.duration) {
-                throw new Error(`Position exceeds track duration (${current.duration}s)`);
+            // position is in seconds, current.duration is in milliseconds
+            if (position * 1000 > current.duration) {
+                throw new Error(`Position exceeds track duration (${Math.floor(current.duration / 1000)}s)`);
             }
 
             // Check if bot is playing
@@ -575,8 +576,8 @@ class MusicPlayerService extends BaseService {
         try {
             const queue = this.queueManager.getQueue(guildId);
 
-            // Validate queue exists and has data
-            if (!queue || !queue.tracks || queue.tracks.length === 0) {
+            // Validate queue exists and has data (current track OR upcoming tracks)
+            if (!queue || (!queue.current && (!queue.tracks || queue.tracks.length === 0))) {
                 this.log(`No valid queue to save for guild ${guildId}`, 'debug');
                 return;
             }
