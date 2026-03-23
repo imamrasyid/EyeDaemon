@@ -113,7 +113,6 @@ class AudioPlayer {
             );
         }
     }
-
     /**
      * Get audio stream from local audio server
      * @param {string} query - The track query or URL
@@ -126,23 +125,20 @@ class AudioPlayer {
         return retryWithBackoff(
             async () => {
                 try {
-                    // Request audio stream from local audio server
                     const params = { query };
 
-                    // Add filter parameter if not 'none'
                     if (filter && filter !== 'none') {
                         params.filter = filter;
                     }
 
-                    // Add position parameter if not 0
                     if (position > 0) {
                         params.position = position;
                     }
 
                     const response = await axios.get(`${this.audioServerUrl}/api/audio/stream`, {
-                        params: params,
+                        params,
                         responseType: 'stream',
-                        timeout: 30000, // 30 second timeout
+                        timeout: 30000,
                     });
 
                     if (!response.data) {
@@ -151,50 +147,27 @@ class AudioPlayer {
 
                     return response.data;
                 } catch (error) {
-                    // Log detailed error
-                    logger.error('Failed to get audio stream', {
-                        error: error.message,
-                        query,
-                        filter,
-                        position,
-                    });
+                    logger.error('Failed to get audio stream', { error: error.message, query, filter, position });
 
-                    // Check if it's a network error that should be retried
                     if (isNetworkError(error)) {
                         throw error; // Will be retried
                     }
 
-                    // Check for specific error types
                     if (error.response) {
-                        // Server responded with error
-                        if (error.response.status === 404) {
-                            throw new AudioError('Track not found or unavailable');
-                        }
-                        if (error.response.status === 403) {
-                            throw new AudioError('Access to track is restricted');
-                        }
-                        if (error.response.status >= 500) {
-                            throw new AudioError('Audio server is experiencing issues');
-                        }
+                        if (error.response.status === 404) throw new AudioError('Track not found or unavailable');
+                        if (error.response.status === 403) throw new AudioError('Access to track is restricted');
+                        if (error.response.status >= 500) throw new AudioError('Audio server is experiencing issues');
                     }
 
-                    // Rethrow with more context
                     throw new AudioError(`Failed to get audio stream: ${error.message}`);
                 }
             },
             {
                 maxRetries: 2,
-                initialDelay: 1000,
-                shouldRetry: (error) => {
-                    // Only retry network errors, not application errors
-                    return isNetworkError(error);
-                },
+                initialDelay: 300, // reduced from 1000ms — music needs fast recovery
+                shouldRetry: (error) => isNetworkError(error),
                 onRetry: (error, attempt) => {
-                    logger.warn('Retrying audio stream request', {
-                        attempt: attempt + 1,
-                        error: error.message,
-                        query,
-                    });
+                    logger.warn('Retrying audio stream request', { attempt: attempt + 1, error: error.message, query });
                 },
             }
         );

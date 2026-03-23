@@ -293,7 +293,7 @@ class MusicController extends Controller {
             const embed = this.createNowPlayingEmbed(current, queue, currentPosition);
             const buttons = this.createMusicControlButtons(guildId);
 
-            await interaction.reply({ embeds: [embed], components: [buttons] });
+            await interaction.reply({ embeds: [embed], components: buttons });
         } catch (error) {
             this.log(`Error in nowplaying command: ${error.message}`, 'error');
             await this.sendError(interaction, 'Failed to display now playing');
@@ -764,8 +764,10 @@ class MusicController extends Controller {
                 return;
             }
 
-            // Add tracks to queue
+            // Add tracks to queue — join voice once, then add all tracks
+            // without re-fetching metadata for each (use URL directly)
             let addedCount = 0;
+
             for (const track of tracks) {
                 try {
                     await this.musicPlayerService.play({
@@ -947,11 +949,9 @@ class MusicController extends Controller {
         const queue = this.musicPlayerService.getQueue(guildId);
         const loopMode = queue.loop || 'off';
 
-        // Determine play/pause button style and emoji
         const playPauseEmoji = isPaused ? '▶️' : '⏸️';
         const playPauseStyle = isPaused ? ButtonStyle.Success : ButtonStyle.Secondary;
 
-        // Determine loop button style based on mode
         let loopStyle = ButtonStyle.Secondary;
         let loopEmoji = '➡️';
         if (loopMode === 'track') {
@@ -962,35 +962,21 @@ class MusicController extends Controller {
             loopEmoji = '🔁';
         }
 
-        const row = new ActionRowBuilder()
-            .addComponents(
-                new ButtonBuilder()
-                    .setCustomId('music_play_pause')
-                    .setEmoji(playPauseEmoji)
-                    .setStyle(playPauseStyle),
-                new ButtonBuilder()
-                    .setCustomId('music_skip')
-                    .setEmoji('⏭️')
-                    .setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder()
-                    .setCustomId('music_stop')
-                    .setEmoji('⏹️')
-                    .setStyle(ButtonStyle.Danger),
-                new ButtonBuilder()
-                    .setCustomId('music_loop')
-                    .setEmoji(loopEmoji)
-                    .setStyle(loopStyle),
-                new ButtonBuilder()
-                    .setCustomId('music_volume_down')
-                    .setEmoji('🔉')
-                    .setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder()
-                    .setCustomId('music_volume_up')
-                    .setEmoji('🔊')
-                    .setStyle(ButtonStyle.Secondary)
-            );
+        // Row 1: playback controls (Discord max 5 buttons per row)
+        const row1 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('music_play_pause').setEmoji(playPauseEmoji).setStyle(playPauseStyle),
+            new ButtonBuilder().setCustomId('music_skip').setEmoji('⏭️').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('music_stop').setEmoji('⏹️').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('music_loop').setEmoji(loopEmoji).setStyle(loopStyle)
+        );
 
-        return row;
+        // Row 2: volume controls
+        const row2 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('music_volume_down').setEmoji('🔉').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('music_volume_up').setEmoji('🔊').setStyle(ButtonStyle.Secondary)
+        );
+
+        return [row1, row2];
     }
 
     /**

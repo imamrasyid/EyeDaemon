@@ -58,6 +58,7 @@ class LevelingModel extends Model {
 
     /**
      * Add XP to user
+     * Uses atomic SQL increment to prevent race conditions from concurrent XP additions.
      * @param {string} userId - User ID
      * @param {string} guildId - Guild ID
      * @param {number} xp - XP to add
@@ -68,8 +69,7 @@ class LevelingModel extends Model {
             await this._ensureLevelRecord(userId, guildId);
 
             // Apply XP multiplier from guild settings
-            let multiplier = 1.0; // Default
-
+            let multiplier = 1.0;
             try {
                 if (this.instance.client && this.instance.client.modules) {
                     const adminModule = this.instance.client.modules.get('admin');
@@ -87,32 +87,26 @@ class LevelingModel extends Model {
                 this.log(`Error getting XP multiplier from config: ${error.message}`, 'warn');
             }
 
-            // Apply multiplier to XP
             const adjustedXP = Math.floor(xp * multiplier);
+            const now = Math.floor(Date.now() / 1000);
 
-            // Get current data
-            const levelData = await this.findOneBy({
-                guild_id: guildId,
-                user_id: userId
-            });
-
-            const oldXP = levelData.xp || 0;
-            const oldLevel = levelData.level || 1;
+            // Read current state before atomic update
+            const before = await this.findOneBy({ guild_id: guildId, user_id: userId });
+            const oldXP = before.xp || 0;
+            const oldLevel = before.level || 1;
             const newXP = oldXP + adjustedXP;
             const newLevel = this.calculateLevelFromXP(newXP);
 
-            const now = Math.floor(Date.now() / 1000);
-
-            // Update XP and level
-            await this.updateBy(
-                { guild_id: guildId, user_id: userId },
-                {
-                    xp: newXP,
-                    level: newLevel,
-                    total_messages: (levelData.total_messages || 0) + 1,
-                    last_xp_at: now,
-                    updated_at: now
-                }
+            // Atomic increment — avoids read-then-write race
+            await this.query(
+                `UPDATE ${this.tableName}
+                 SET xp             = xp + ?,
+                     level          = ?,
+                     total_messages = total_messages + 1,
+                     last_xp_at     = ?,
+                     updated_at     = ?
+                 WHERE guild_id = ? AND user_id = ?`,
+                [adjustedXP, newLevel, now, now, guildId, userId]
             );
 
             return {
@@ -132,51 +126,48 @@ class LevelingModel extends Model {
 
     /**
      * Add XP to multiple users (batch operation)
+     * All reads and writes use the transaction connection for true atomicity.
      * @param {Array<Object>} updates - Array of {userId, guildId, xp} objects
      * @returns {Promise<Array>} Array of level up results
      */
     async batchAddXP(updates) {
         try {
+            // Ensure all records exist before entering transaction
+            for (const { userId, guildId } of updates) {
+                await this._ensureLevelRecord(userId, guildId);
+            }
+
             const results = [];
 
-            // Use transaction for atomicity
             await this.db.transaction(async (db) => {
-                for (const update of updates) {
-                    const { userId, guildId, xp } = update;
+                const now = Math.floor(Date.now() / 1000);
 
-                    // Ensure record exists
-                    await this._ensureLevelRecord(userId, guildId);
+                for (const { userId, guildId, xp } of updates) {
+                    // Read inside transaction using transaction connection
+                    const rows = await db.query(
+                        `SELECT xp, level FROM ${this.tableName} WHERE guild_id = ? AND user_id = ?`,
+                        [guildId, userId]
+                    );
 
-                    // Get current data
-                    const levelData = await this.findOneBy({
-                        guild_id: guildId,
-                        user_id: userId
-                    });
-
-                    const oldXP = levelData.xp || 0;
-                    const oldLevel = levelData.level || 1;
+                    const row = rows?.[0];
+                    const oldXP = row?.xp || 0;
+                    const oldLevel = row?.level || 1;
                     const newXP = oldXP + xp;
                     const newLevel = this.calculateLevelFromXP(newXP);
 
-                    const now = Math.floor(Date.now() / 1000);
-
-                    // Update XP and level
                     await db.query(
-                        `UPDATE ${this.tableName} 
-                         SET xp = ?, level = ?, total_messages = total_messages + 1, last_xp_at = ?, updated_at = ? 
+                        `UPDATE ${this.tableName}
+                         SET xp = ?, level = ?, total_messages = total_messages + 1,
+                             last_xp_at = ?, updated_at = ?
                          WHERE guild_id = ? AND user_id = ?`,
                         [newXP, newLevel, now, now, guildId, userId]
                     );
 
                     results.push({
-                        userId,
-                        guildId,
+                        userId, guildId,
                         leveledUp: newLevel > oldLevel,
-                        oldLevel,
-                        newLevel,
-                        xpGained: xp,
-                        oldXP,
-                        newXP
+                        oldLevel, newLevel,
+                        xpGained: xp, oldXP, newXP
                     });
                 }
             });
@@ -407,40 +398,22 @@ class LevelingModel extends Model {
     }
 
     /**
-     * Ensure level record exists for user
+     * Ensure level record exists for user.
+     * Uses INSERT ... ON CONFLICT DO NOTHING to prevent TOCTOU race conditions.
      * @private
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @returns {Promise<void>}
      */
     async _ensureLevelRecord(userId, guildId) {
         try {
-            const exists = await this.exists({
-                guild_id: guildId,
-                user_id: userId
-            });
-
-            if (exists) {
-                return;
-            }
-
             const now = Math.floor(Date.now() / 1000);
             const recordId = `${guildId}-${userId}`;
 
-            await this.insert({
-                id: recordId,
-                guild_id: guildId,
-                user_id: userId,
-                xp: 0,
-                level: 1,
-                total_messages: 0,
-                voice_minutes: 0,
-                last_xp_at: null,
-                created_at: now,
-                updated_at: now
-            });
-
-            this.log(`Created level record for user ${userId}`, 'info');
+            await this.query(
+                `INSERT INTO ${this.tableName}
+                 (id, guild_id, user_id, xp, level, total_messages, voice_minutes, last_xp_at, created_at, updated_at)
+                 VALUES (?, ?, ?, 0, 1, 0, 0, NULL, ?, ?)
+                 ON CONFLICT(id) DO NOTHING`,
+                [recordId, guildId, userId, now, now]
+            );
         } catch (error) {
             this.log(`Error ensuring level record: ${error.message}`, 'error');
             throw error;

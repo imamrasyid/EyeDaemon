@@ -88,7 +88,10 @@ class MetadataService extends BaseService {
             this.log('info', 'Metadata fetched successfully', { query, duration: Date.now() - startTime });
             return trackInfo;
         } catch (error) {
-            this.handleError(error, 'getTrackInfo');
+            // Re-throw so callers get the real error (yt-dlp timeout, unavailable, etc.)
+            // instead of receiving undefined and producing a generic message
+            this.log('error', 'Failed to fetch metadata', { query, error: error.message });
+            throw error;
         }
     }
 

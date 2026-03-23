@@ -32,8 +32,10 @@ class AudioController extends BaseController {
             const audioService = this.getService('audioService');
             const metadataService = this.getService('metadataService');
 
-            // Try to get cached streamUrl to avoid a second yt-dlp spawn
-            const cached = metadataService.getFromCache(query);
+            // Normalize query the same way MetadataService does so cache lookup
+            // always hits — prevents a second yt-dlp spawn on every /stream request
+            const normalizedQuery = query.trim().toLowerCase();
+            const cached = metadataService.getFromCache(normalizedQuery);
             const streamUrl = cached?.streamUrl || null;
 
             await audioService.streamAudio({

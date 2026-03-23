@@ -20,6 +20,8 @@ class ModerationModel extends Model {
 
     /**
      * Add warning to user
+     * Note: moderation logging is handled by ModerationService via InfractionService,
+     * so this method only persists the warning record.
      * @param {string} userId - User ID
      * @param {string} guildId - Guild ID
      * @param {string} moderatorId - Moderator user ID
@@ -43,9 +45,6 @@ class ModerationModel extends Model {
                 expires_at: expiresAt,
                 created_at: now
             });
-
-            // Log the moderation action
-            await this.logAction(guildId, 'warn', userId, moderatorId, reason);
 
             this.log(`Added warning ${warningId} for user ${userId}`, 'info');
 
@@ -73,9 +72,6 @@ class ModerationModel extends Model {
      */
     async getWarnings(userId, guildId, activeOnly = true) {
         try {
-            // Expire old warnings first
-            await this._expireWarnings(guildId);
-
             const criteria = {
                 user_id: userId,
                 guild_id: guildId
@@ -414,25 +410,44 @@ class ModerationModel extends Model {
     }
 
     /**
-     * Expire old warnings based on expires_at timestamp
-     * @private
-     * @param {string} guildId - Guild ID
-     * @returns {Promise<void>}
+     * Expire old warnings based on expires_at timestamp.
+     * Should be called periodically by CleanupManager, not on every getWarnings() call.
+     * @param {string} guildId - Guild ID (optional, expires all guilds if omitted)
+     * @returns {Promise<number>} Number of warnings expired
      */
-    async _expireWarnings(guildId) {
+    async expireWarnings(guildId = null) {
         try {
             const now = Math.floor(Date.now() / 1000);
-
-            await this.query(
-                `UPDATE ${this.tableName} 
+            let sql = `UPDATE ${this.tableName} 
                  SET is_active = false 
-                 WHERE guild_id = ? AND is_active = true AND expires_at IS NOT NULL AND expires_at <= ?`,
-                [guildId, now]
-            );
+                 WHERE is_active = true AND expires_at IS NOT NULL AND expires_at <= ?`;
+            const params = [now];
+
+            if (guildId) {
+                sql += ` AND guild_id = ?`;
+                params.push(guildId);
+            }
+
+            const result = await this.query(sql, params);
+            const count = result?.rowsAffected || 0;
+
+            if (count > 0) {
+                this.log(`Expired ${count} warnings${guildId ? ` in guild ${guildId}` : ''}`, 'info');
+            }
+
+            return count;
         } catch (error) {
             this.log(`Error expiring warnings: ${error.message}`, 'warn');
-            // Don't throw - expiration failure shouldn't break the flow
+            return 0;
         }
+    }
+
+    /**
+     * @deprecated Use expireWarnings() instead. Kept for internal backward compatibility.
+     * @private
+     */
+    async _expireWarnings(guildId) {
+        return this.expireWarnings(guildId);
     }
 }
 

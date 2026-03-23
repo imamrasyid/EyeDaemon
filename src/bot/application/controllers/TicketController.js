@@ -141,13 +141,23 @@ class TicketController extends Controller {
 
     /**
      * Claim command handler
-     * Claims a ticket for a staff member
+     * Claims a ticket for a staff member (requires ManageChannels or Administrator)
      * @param {Object} interaction - Discord interaction
      */
     async claim(interaction) {
         try {
             const guildId = interaction.guild.id;
             const channelId = interaction.channel.id;
+
+            // Permission check — only staff can claim tickets
+            const member = interaction.member;
+            const hasPermission = member.permissions.has('ManageChannels') ||
+                member.permissions.has('Administrator');
+
+            if (!hasPermission) {
+                await interaction.reply({ content: '❌ You need the **Manage Channels** permission to claim tickets', ephemeral: true });
+                return;
+            }
 
             // Check if this is a ticket channel
             const ticket = await this.ticketModel.getTicketByChannel(channelId, guildId);

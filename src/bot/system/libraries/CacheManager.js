@@ -47,7 +47,8 @@ class CacheManager {
             sets: 0,
             deletes: 0,
             expirations: 0,
-            errors: 0
+            errors: 0,
+            totalEntries: null // null = not yet synced from DB
         };
 
         this.cleanupTimer = null;
@@ -225,9 +226,16 @@ class CacheManager {
                     updated_at = excluded.updated_at
             `;
 
-            await this.database.query(sql, [key, serializedValue, expiresAt, now, now]);
+            const result = await this.database.query(sql, [key, serializedValue, expiresAt, now, now]);
 
             this.stats.sets++;
+            // Track inserts vs updates for totalEntries counter
+            if (this.stats.totalEntries !== null) {
+                // changes === 1 on insert, rowsAffected may differ on upsert — use lastInsertRowid as insert signal
+                if (result.rowsAffected === 1 && result.lastInsertRowid) {
+                    this.stats.totalEntries++;
+                }
+            }
         } catch (error) {
             this.stats.errors++;
             this.log(`Error setting cache key ${key}: ${error.message}`, 'error');
@@ -255,6 +263,9 @@ class CacheManager {
             const deleted = result.changes > 0;
             if (deleted) {
                 this.stats.deletes++;
+                if (this.stats.totalEntries !== null) {
+                    this.stats.totalEntries = Math.max(0, this.stats.totalEntries - 1);
+                }
             }
 
             return deleted;
@@ -341,6 +352,9 @@ class CacheManager {
             // Update statistics
             this.stats.expirations += deletedCount;
             this.stats.deletes += deletedCount;
+            if (this.stats.totalEntries !== null) {
+                this.stats.totalEntries = Math.max(0, this.stats.totalEntries - deletedCount);
+            }
 
             const duration = Date.now() - startTime;
 
@@ -380,19 +394,32 @@ class CacheManager {
         try {
             const now = Date.now();
 
-            // Get total cache size
-            const sizeSQL = `SELECT COUNT(*) as total FROM ${this.config.tableName}`;
-            const sizeResult = await this.database.queryOne(sizeSQL);
-            const totalEntries = sizeResult?.total || 0;
+            let totalEntries;
+            let expiredEntries;
 
-            // Get expired entries count
-            const expiredSQL = `
-                SELECT COUNT(*) as expired 
-                FROM ${this.config.tableName} 
-                WHERE expires_at <= ?
-            `;
-            const expiredResult = await this.database.queryOne(expiredSQL, [now]);
-            const expiredEntries = expiredResult?.expired || 0;
+            if (this.stats.totalEntries !== null) {
+                // Use in-memory counter for total — only query expired count
+                totalEntries = this.stats.totalEntries;
+                const expiredSQL = `
+                    SELECT COUNT(*) as expired 
+                    FROM ${this.config.tableName} 
+                    WHERE expires_at <= ?
+                `;
+                const expiredResult = await this.database.queryOne(expiredSQL, [now]);
+                expiredEntries = expiredResult?.expired || 0;
+            } else {
+                // First call: fetch both counts in a single query, then cache total in-memory
+                const statsSQL = `
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN expires_at <= ? THEN 1 ELSE 0 END) as expired
+                    FROM ${this.config.tableName}
+                `;
+                const statsResult = await this.database.queryOne(statsSQL, [now]);
+                totalEntries = statsResult?.total || 0;
+                expiredEntries = statsResult?.expired || 0;
+                this.stats.totalEntries = totalEntries;
+            }
 
             // Calculate hit rate
             const totalRequests = this.stats.hits + this.stats.misses;
@@ -449,7 +476,8 @@ class CacheManager {
             sets: 0,
             deletes: 0,
             expirations: 0,
-            errors: 0
+            errors: 0,
+            totalEntries: null // will re-sync from DB on next getStats()
         };
 
         this.log('Cache statistics reset', 'info');

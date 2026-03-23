@@ -286,8 +286,14 @@ class EconomyController extends Controller {
             // Deduct bet from balance
             await this.economyService.removeBalance(userId, guildId, bet, 'Blackjack bet');
 
-            // Create game
-            const game = this.gameService.createBlackjackGame(userId, guildId, bet);
+            // Create game — if this throws, refund the bet
+            let game;
+            try {
+                game = this.gameService.createBlackjackGame(userId, guildId, bet);
+            } catch (gameError) {
+                await this.economyService.addBalance(userId, guildId, bet, 'Blackjack bet refund (game creation failed)');
+                throw gameError;
+            }
 
             // Check for instant blackjack (21 on first two cards)
             if (game.playerValue === 21) {

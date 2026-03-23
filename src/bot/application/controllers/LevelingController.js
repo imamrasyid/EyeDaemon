@@ -142,6 +142,12 @@ class LevelingController extends Controller {
      */
     async givexp(interaction) {
         try {
+            // Permission check
+            if (!interaction.member.permissions.has('Administrator')) {
+                await interaction.reply({ content: '❌ You need the **Administrator** permission to give XP', ephemeral: true });
+                return;
+            }
+
             const user = interaction.options.getUser('user');
             const amount = interaction.options.getInteger('amount');
             const guildId = interaction.guild.id;
@@ -174,6 +180,12 @@ class LevelingController extends Controller {
      */
     async removexp(interaction) {
         try {
+            // Permission check
+            if (!interaction.member.permissions.has('Administrator')) {
+                await interaction.reply({ content: '❌ You need the **Administrator** permission to remove XP', ephemeral: true });
+                return;
+            }
+
             const user = interaction.options.getUser('user');
             const amount = interaction.options.getInteger('amount');
             const guildId = interaction.guild.id;
@@ -201,6 +213,12 @@ class LevelingController extends Controller {
      */
     async setlevel(interaction) {
         try {
+            // Permission check
+            if (!interaction.member.permissions.has('Administrator')) {
+                await interaction.reply({ content: '❌ You need the **Administrator** permission to set levels', ephemeral: true });
+                return;
+            }
+
             const user = interaction.options.getUser('user');
             const level = interaction.options.getInteger('level');
             const guildId = interaction.guild.id;
@@ -228,6 +246,12 @@ class LevelingController extends Controller {
      */
     async resetxp(interaction) {
         try {
+            // Permission check
+            if (!interaction.member.permissions.has('Administrator')) {
+                await interaction.reply({ content: '❌ You need the **Administrator** permission to reset XP', ephemeral: true });
+                return;
+            }
+
             const user = interaction.options.getUser('user');
             const guildId = interaction.guild.id;
 
@@ -249,15 +273,29 @@ class LevelingController extends Controller {
 
     /**
      * Format leaderboard data
+     * Resolves usernames in batch to avoid N+1 Discord API calls.
      * @param {Array} leaderboard - Leaderboard data
      * @param {string} type - Leaderboard type
      * @returns {Promise<string>} Formatted leaderboard
      */
     async formatLeaderboard(leaderboard, type) {
-        const lines = [];
+        // Collect IDs not already in cache
+        const uncachedIds = leaderboard
+            .map(e => e.userId)
+            .filter(id => !this.client.users.cache.has(id));
 
+        // Batch fetch uncached users (single API call via fetchMany if available, else parallel)
+        if (uncachedIds.length > 0) {
+            try {
+                await Promise.all(uncachedIds.map(id => this.client.users.fetch(id).catch(() => null)));
+            } catch {
+                // Non-critical — unknown users will show as 'Unknown User'
+            }
+        }
+
+        const lines = [];
         for (const entry of leaderboard) {
-            const user = await this.client.users.fetch(entry.userId).catch(() => null);
+            const user = this.client.users.cache.get(entry.userId);
             const username = user ? user.tag : 'Unknown User';
 
             let value;

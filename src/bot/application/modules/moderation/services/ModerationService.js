@@ -77,14 +77,14 @@ class ModerationService extends BaseService {
                 };
             }
 
-            // Send DM before banning
-            await this.sendModDM(target, guild, 'banned', reason);
-
-            // Execute ban
+            // Execute ban first, then notify
             await guild.members.ban(target.id, {
                 reason: `${moderator.tag}: ${reason}`,
                 deleteMessageSeconds: deleteMessageDays * 86400
             });
+
+            // Send DM after ban (best-effort — user may have left)
+            await this.sendModDM(target, guild, 'banned', reason);
 
             // Create infraction record
             if (this.infractionService) {
@@ -178,11 +178,11 @@ class ModerationService extends BaseService {
                 };
             }
 
-            // Send DM before kicking
-            await this.sendModDM(member.user, guild, 'kicked', reason);
-
-            // Execute kick
+            // Execute kick first, then notify
             await member.kick(`${moderator.tag}: ${reason}`);
+
+            // Send DM after kick (best-effort)
+            await this.sendModDM(member.user, guild, 'kicked', reason);
 
             // Create infraction record
             if (this.infractionService) {
@@ -364,11 +364,11 @@ class ModerationService extends BaseService {
                 };
             }
 
-            // Send DM before timeout
-            await this.sendModDM(member.user, guild, 'timed out', reason, { duration });
-
-            // Execute timeout
+            // Execute timeout first, then notify
             await member.timeout(duration * 60 * 1000, `${moderator.tag}: ${reason}`);
+
+            // Send DM after timeout (best-effort)
+            await this.sendModDM(member.user, guild, 'timed out', reason, { duration });
 
             // Create infraction record
             if (this.infractionService) {
@@ -422,7 +422,7 @@ class ModerationService extends BaseService {
                 };
             }
 
-            // Send DM
+            // Send DM after warning (best-effort)
             await this.sendModDM(user, guild, 'warned', reason);
 
             // Create warning via model

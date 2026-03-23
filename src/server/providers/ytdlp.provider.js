@@ -98,9 +98,12 @@ class YtdlpProvider {
                     const data = JSON.parse(output);
                     const result = data.entries?.[0] || data;
 
-                    // Attach the best direct stream URL so audio.service can stream
-                    // without spawning yt-dlp a second time
-                    result.streamUrl = result.url || result.webpage_url;
+                    // result.url is the direct CDN audio URL (streamable).
+                    // result.webpage_url is the YouTube watch page — NOT streamable.
+                    // Only attach streamUrl if it's a real CDN URL (not a youtube.com URL).
+                    const rawUrl = result.url || '';
+                    const isDirectCdn = rawUrl && !rawUrl.includes('youtube.com') && !rawUrl.includes('youtu.be');
+                    result.streamUrl = isDirectCdn ? rawUrl : null;
 
                     logger.debug("yt-dlp metadata fetched", { query, title: result.title });
                     resolve(result);

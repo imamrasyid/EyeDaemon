@@ -81,6 +81,7 @@ class MusicModel extends Model {
      */
     invalidate(query) {
         this._cache.delete(query.trim().toLowerCase());
+        this.log(`Cache invalidated: ${query}`, 'debug');
     }
 
     /**

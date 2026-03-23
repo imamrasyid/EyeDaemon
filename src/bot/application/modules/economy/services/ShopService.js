@@ -170,6 +170,8 @@ class ShopService extends BaseService {
 
     /**
      * Purchase an item
+     * All balance deduction, stock update, and inventory addition are wrapped in a
+     * single transaction to prevent partial failures leaving inconsistent state.
      * @param {string} userId - User ID
      * @param {string} guildId - Guild ID
      * @param {string} itemId - Item ID
@@ -184,43 +186,27 @@ class ShopService extends BaseService {
         }
 
         try {
-            // Get item
             const item = await this.getItem(itemId);
 
             if (!item) {
-                return {
-                    success: false,
-                    message: 'Item not found'
-                };
+                return { success: false, message: 'Item not found' };
             }
 
             if (item.guild_id !== guildId) {
-                return {
-                    success: false,
-                    message: 'Item not available in this guild'
-                };
+                return { success: false, message: 'Item not available in this guild' };
             }
 
-            // Check stock
             if (item.stock !== -1 && item.stock < quantity) {
-                return {
-                    success: false,
-                    message: `Insufficient stock. Available: ${item.stock}`
-                };
+                return { success: false, message: `Insufficient stock. Available: ${item.stock}` };
             }
 
             const totalPrice = item.price * quantity;
 
-            // Get economy service to check balance
             const economyModule = this.client.modules.get('economy');
-            if (!economyModule) {
-                throw new Error('Economy module not available');
-            }
+            if (!economyModule) throw new Error('Economy module not available');
 
             const economyService = economyModule.getService('EconomyService');
-            if (!economyService) {
-                throw new Error('EconomyService not available');
-            }
+            if (!economyService) throw new Error('EconomyService not available');
 
             const balance = await economyService.getBalance(userId, guildId);
 
@@ -231,19 +217,48 @@ class ShopService extends BaseService {
                 };
             }
 
-            // Deduct balance
-            await economyService.removeBalance(userId, guildId, totalPrice, `Purchased ${quantity}x ${item.name}`);
-
-            // Update stock
-            if (item.stock !== -1) {
-                await this.query(
-                    'UPDATE shop_items SET stock = stock - ? WHERE id = ?',
-                    [quantity, itemId]
+            // Atomic: deduct balance, update stock, add to inventory — all or nothing
+            const db = this.getDatabase();
+            await db.transaction(async (tx) => {
+                // Deduct balance atomically (guards against concurrent purchases)
+                const deductResult = await tx.query(
+                    `UPDATE economy_accounts
+                     SET wallet_balance = wallet_balance - ?,
+                         total_spent    = total_spent + ?,
+                         updated_at     = ?
+                     WHERE guild_id = ? AND user_id = ? AND wallet_balance >= ?`,
+                    [totalPrice, totalPrice, Math.floor(Date.now() / 1000), guildId, userId, totalPrice]
                 );
-            }
 
-            // Add to inventory
-            await this.addToInventory(userId, guildId, itemId, quantity);
+                if (!deductResult || deductResult.rowsAffected === 0) {
+                    const err = new Error('INSUFFICIENT_BALANCE');
+                    err.code = 'INSUFFICIENT_BALANCE';
+                    throw err;
+                }
+
+                // Update stock atomically (guards against overselling)
+                if (item.stock !== -1) {
+                    const stockResult = await tx.query(
+                        `UPDATE shop_items SET stock = stock - ? WHERE id = ? AND stock >= ?`,
+                        [quantity, itemId, quantity]
+                    );
+
+                    if (!stockResult || stockResult.rowsAffected === 0) {
+                        const err = new Error('INSUFFICIENT_STOCK');
+                        err.code = 'INSUFFICIENT_STOCK';
+                        throw err;
+                    }
+                }
+
+                // Add to inventory
+                const invId = `${guildId}-${userId}-${itemId}-${Date.now()}`;
+                await tx.query(
+                    `INSERT INTO user_inventories (id, guild_id, user_id, item_id, quantity, acquired_at)
+                     VALUES (?, ?, ?, ?, ?, ?)
+                     ON CONFLICT(guild_id, user_id, item_id) DO UPDATE SET quantity = quantity + ?`,
+                    [invId, guildId, userId, itemId, quantity, Date.now(), quantity]
+                );
+            });
 
             this.log(`User ${userId} purchased ${quantity}x ${item.name}`, 'info');
 
@@ -255,6 +270,12 @@ class ShopService extends BaseService {
                 newBalance: balance.wallet - totalPrice
             };
         } catch (error) {
+            if (error.code === 'INSUFFICIENT_BALANCE') {
+                return { success: false, message: 'Insufficient balance' };
+            }
+            if (error.code === 'INSUFFICIENT_STOCK') {
+                return { success: false, message: 'Insufficient stock' };
+            }
             throw this.handleError(error, 'purchaseItem', { userId, guildId, itemId, quantity });
         }
     }

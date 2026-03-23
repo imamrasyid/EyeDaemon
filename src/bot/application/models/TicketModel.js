@@ -19,20 +19,36 @@ class TicketModel extends Model {
     }
 
     /**
-     * Get the next ticket number for a guild
+     * Get the next ticket number for a guild.
+     * Uses an atomic increment on a dedicated counter row to prevent race conditions
+     * that would occur with MAX() + 1 under concurrent requests.
      * @param {string} guildId - Guild ID
      * @returns {Promise<number>} Next ticket number
      */
     async getNextTicketNumber(guildId) {
         try {
+            // Upsert a counter row and atomically increment it
+            await this.query(
+                `INSERT INTO ticket_counters (guild_id, last_number)
+                 VALUES (?, 1)
+                 ON CONFLICT(guild_id) DO UPDATE SET last_number = last_number + 1`,
+                [guildId]
+            );
+
             const result = await this.queryOne(
+                `SELECT last_number FROM ticket_counters WHERE guild_id = ?`,
+                [guildId]
+            );
+
+            return result?.last_number ?? 1;
+        } catch (error) {
+            // Fallback to MAX() approach if ticket_counters table doesn't exist yet
+            this.log(`ticket_counters unavailable, falling back to MAX(): ${error.message}`, 'warn');
+            const fallback = await this.queryOne(
                 `SELECT MAX(ticket_number) as max_num FROM tickets WHERE guild_id = ?`,
                 [guildId]
             );
-            return (result?.max_num || 0) + 1;
-        } catch (error) {
-            this.log(`Error getting next ticket number: ${error.message}`, 'error');
-            throw error;
+            return (fallback?.max_num || 0) + 1;
         }
     }
 
@@ -139,10 +155,11 @@ class TicketModel extends Model {
 
             await this.update(ticketId, {
                 status: 'closed',
-                closed_at: now
+                closed_at: now,
+                closed_by: closedBy
             });
 
-            this.log(`Closed ticket ${ticketId}`, 'info');
+            this.log(`Closed ticket ${ticketId} by ${closedBy}`, 'info');
         } catch (error) {
             this.log(`Error closing ticket: ${error.message}`, 'error');
             throw error;

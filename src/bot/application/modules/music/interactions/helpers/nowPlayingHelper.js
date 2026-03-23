@@ -29,10 +29,10 @@ async function updateNowPlayingMessage(interaction, playerService) {
     // Create updated embed
     const embed = createNowPlayingEmbed(current, queue, currentPosition);
 
-    // Create updated buttons
+    // Create updated buttons (returns array of ActionRows)
     const buttons = createMusicControlButtons(interaction.guildId, playerService, queue);
 
-    await interaction.update({ embeds: [embed], components: [buttons] });
+    await interaction.update({ embeds: [embed], components: buttons });
 }
 
 /**
@@ -49,16 +49,17 @@ function createNowPlayingEmbed(track, queue, currentPosition) {
         .setDescription(`[${track.title}](${track.url})`);
 
     // Add duration and position info
+    // track.duration is already in milliseconds (converted by MusicModel)
     if (currentPosition !== null && currentPosition >= 0) {
         const currentMs = currentPosition * 1000;
-        const progress = createProgressBar(currentMs, track.duration * 1000, 20);
+        const progress = createProgressBar(currentMs, track.duration, 20);
         embed.addFields({
             name: 'Progress',
-            value: `${formatDuration(currentMs)} ${progress} ${formatDuration(track.duration * 1000)}`,
+            value: `${formatDuration(currentMs)} ${progress} ${formatDuration(track.duration)}`,
             inline: false
         });
     } else {
-        embed.addFields({ name: 'Duration', value: formatDuration(track.duration * 1000), inline: true });
+        embed.addFields({ name: 'Duration', value: formatDuration(track.duration), inline: true });
     }
 
     embed.addFields({ name: 'Requested By', value: `<@${track.requestedBy.id}>`, inline: true });
@@ -107,7 +108,7 @@ function createProgressBar(current, total, length = 20) {
  * @param {string} guildId - Guild ID
  * @param {Object} playerService - MusicPlayerService instance
  * @param {Object} queue - Queue object
- * @returns {ActionRowBuilder} Action row with control buttons
+ * @returns {ActionRowBuilder[]} Two action rows with control buttons (max 5 per row)
  */
 function createMusicControlButtons(guildId, playerService, queue) {
     const isPaused = playerService.isPaused(guildId);
@@ -126,14 +127,21 @@ function createMusicControlButtons(guildId, playerService, queue) {
         loopEmoji = '🔁';
     }
 
-    return new ActionRowBuilder().addComponents(
+    // Row 1: playback controls (max 5 buttons per row)
+    const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('music_play_pause').setEmoji(playPauseEmoji).setStyle(playPauseStyle),
         new ButtonBuilder().setCustomId('music_skip').setEmoji('⏭️').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('music_stop').setEmoji('⏹️').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('music_loop').setEmoji(loopEmoji).setStyle(loopStyle),
+        new ButtonBuilder().setCustomId('music_loop').setEmoji(loopEmoji).setStyle(loopStyle)
+    );
+
+    // Row 2: volume controls
+    const row2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('music_volume_down').setEmoji('🔉').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('music_volume_up').setEmoji('🔊').setStyle(ButtonStyle.Secondary)
     );
+
+    return [row1, row2];
 }
 
 module.exports = {

@@ -5,7 +5,7 @@
  * Initializes Discord client, loads core libraries, and manages the bot lifecycle.
  */
 
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, IntentsBitField } = require('discord.js');
 const Loader = require('./system/core/Loader');
 const EventManager = require('./system/managers/EventManager');
 const InteractionManager = require('./system/managers/InteractionManager');
@@ -22,11 +22,11 @@ class Bot {
         // Initialize Discord client with required intents
         this.client = new Client({
             intents: [
-                GatewayIntentBits.Guilds,
-                GatewayIntentBits.GuildVoiceStates,
-                GatewayIntentBits.GuildMessages,
-                GatewayIntentBits.GuildMembers,
-                GatewayIntentBits.MessageContent,
+                IntentsBitField.Flags.Guilds,
+                IntentsBitField.Flags.GuildVoiceStates,
+                IntentsBitField.Flags.GuildMessages,
+                IntentsBitField.Flags.GuildMembers,
+                IntentsBitField.Flags.MessageContent,
             ],
         });
 
@@ -753,8 +753,8 @@ class Bot {
      * Setup rate limit handling for Discord client
      */
     setupRateLimitHandling() {
-        // Handle rate limit events from Discord.js
-        this.client.rest.on('rateLimited', (rateLimitInfo) => {
+        // Handle rate limit events from Discord.js v13
+        this.client.on('rateLimit', (rateLimitInfo) => {
             logger.warn('Discord API rate limit hit', {
                 timeout: rateLimitInfo.timeout,
                 limit: rateLimitInfo.limit,

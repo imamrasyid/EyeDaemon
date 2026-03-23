@@ -7,7 +7,6 @@
 
 const BaseService = require('../../../../system/core/BaseService');
 const { AudioPlayerStatus } = require('@discordjs/voice');
-const { v4: uuidv4 } = require('uuid');
 
 class MusicPlayerService extends BaseService {
     /**
@@ -26,7 +25,17 @@ class MusicPlayerService extends BaseService {
         this.guildConfigService = null;
 
         // Track current playback state for persistence
+        // Each entry: { startTime, track, pausedAt }
+        // startTime is adjusted on seek so elapsed = Date.now() - startTime
+        // pausedAt is set when paused, cleared on resume
         this.playbackStates = new Map();
+
+        // Prefetch cache: guildId → Promise<trackInfo>
+        // Warmed up while current track is playing so next track starts instantly
+        this._prefetchCache = new Map();
+
+        // In-memory cache for guild volume defaults to avoid DB read on every track
+        this._volumeDefaults = new Map();
     }
 
     /**
@@ -102,13 +111,42 @@ class MusicPlayerService extends BaseService {
                 await this.startPlayback(guildId);
             }
 
-            // Save queue state
-            await this.saveQueue(guildId);
+            // Fire-and-forget: queue persistence doesn't need to block the response
+            this.saveQueue(guildId).catch(err =>
+                this.log(`saveQueue error: ${err.message}`, 'warn')
+            );
 
             return { track, position };
         } catch (error) {
             throw this.handleError(error, 'play');
         }
+    }
+
+    /**
+     * Prefetch metadata for the next track in queue.
+     * Called after current track starts playing so the next track's metadata
+     * is already cached when startPlayback() is called.
+     * @param {string} guildId
+     * @private
+     */
+    _prefetchNext(guildId) {
+        const queue = this.queueManager.getQueue(guildId);
+        const nextTrack = queue.tracks[0];
+
+        if (!nextTrack || !nextTrack.query) return;
+
+        // Don't prefetch if already in flight or cached
+        if (this._prefetchCache.has(guildId)) return;
+
+        this.log(`Prefetching next track: ${nextTrack.title}`, 'debug');
+
+        const promise = this.musicModel.getTrackInfo(nextTrack.query).catch((err) => {
+            this.log(`Prefetch failed for ${nextTrack.title}: ${err.message}`, 'warn');
+        }).finally(() => {
+            this._prefetchCache.delete(guildId);
+        });
+
+        this._prefetchCache.set(guildId, promise);
     }
 
     /**
@@ -150,19 +188,25 @@ class MusicPlayerService extends BaseService {
             // Subscribe connection to player
             connection.connection.subscribe(player);
 
-            // Set volume
+            // Set volume — use cached default to avoid DB read on every track
             let volume = this.queueManager.getVolume(guildId);
 
-            // If volume is default (80), check guild settings
             if (volume === 80 && this.guildConfigService) {
-                try {
-                    const defaultVolume = await this.guildConfigService.getSetting(guildId, 'volume_default');
-                    if (defaultVolume !== undefined && defaultVolume !== null) {
-                        volume = defaultVolume;
-                        this.queueManager.setVolume(guildId, volume);
+                if (!this._volumeDefaults.has(guildId)) {
+                    // First track for this guild: fetch once and cache
+                    try {
+                        const defaultVolume = await this.guildConfigService.getSetting(guildId, 'volume_default');
+                        if (defaultVolume !== undefined && defaultVolume !== null) {
+                            this._volumeDefaults.set(guildId, defaultVolume);
+                        }
+                    } catch (err) {
+                        this.log(`Error getting default volume: ${err.message}`, 'warn');
                     }
-                } catch (error) {
-                    this.log(`Error getting default volume: ${error.message}`, 'warn');
+                }
+                const cached = this._volumeDefaults.get(guildId);
+                if (cached !== undefined) {
+                    volume = cached;
+                    this.queueManager.setVolume(guildId, volume);
                 }
             }
 
@@ -172,6 +216,7 @@ class MusicPlayerService extends BaseService {
             this.playbackStates.set(guildId, {
                 startTime: Date.now(),
                 track: track,
+                pausedAt: null,
             });
 
             // Remove any stale Idle/error listeners before attaching new ones
@@ -183,6 +228,7 @@ class MusicPlayerService extends BaseService {
             player.once(AudioPlayerStatus.Idle, () => {
                 this.log(`Track finished, playing next track`, 'info');
                 this.playbackStates.delete(guildId);
+                this._prefetchCache.delete(guildId);
                 this.startPlayback(guildId);
             });
 
@@ -190,17 +236,27 @@ class MusicPlayerService extends BaseService {
             player.once('error', (error) => {
                 this.log(`Player error: ${error.message}`, 'error');
                 this.playbackStates.delete(guildId);
+                this._prefetchCache.delete(guildId);
+                // Invalidate cache for this track so next play re-fetches fresh metadata
+                if (track.query && this.musicModel) {
+                    this.musicModel.invalidate(track.query);
+                }
                 // Try to play next track
                 this.startPlayback(guildId);
             });
 
-            // Save queue state
-            await this.saveQueue(guildId);
-
-            // Send now playing message
+            // Fire-and-forget: DB write and Discord message don't block audio start
+            this.saveQueue(guildId).catch(err =>
+                this.log(`saveQueue error: ${err.message}`, 'warn')
+            );
             if (connection.textChannel) {
-                await this.sendNowPlayingMessage(connection.textChannel, track);
+                this.sendNowPlayingMessage(connection.textChannel, track).catch(err =>
+                    this.log(`sendNowPlayingMessage error: ${err.message}`, 'warn')
+                );
             }
+
+            // Prefetch next track metadata while current track plays
+            this._prefetchNext(guildId);
         } catch (error) {
             this.handleError(error, 'startPlayback');
 
@@ -224,7 +280,14 @@ class MusicPlayerService extends BaseService {
      * @returns {boolean} True if paused successfully
      */
     pause(guildId) {
-        return this.audioPlayer.pause(guildId);
+        const success = this.audioPlayer.pause(guildId);
+        if (success) {
+            const state = this.playbackStates.get(guildId);
+            if (state && !state.pausedAt) {
+                state.pausedAt = Date.now();
+            }
+        }
+        return success;
     }
 
     /**
@@ -233,7 +296,16 @@ class MusicPlayerService extends BaseService {
      * @returns {boolean} True if resumed successfully
      */
     resume(guildId) {
-        return this.audioPlayer.resume(guildId);
+        const success = this.audioPlayer.resume(guildId);
+        if (success) {
+            const state = this.playbackStates.get(guildId);
+            if (state && state.pausedAt) {
+                // Shift startTime forward by the duration we were paused
+                state.startTime += Date.now() - state.pausedAt;
+                state.pausedAt = null;
+            }
+        }
+        return success;
     }
 
     /**
@@ -244,7 +316,18 @@ class MusicPlayerService extends BaseService {
     skip(guildId) {
         const current = this.queueManager.getCurrent(guildId);
         if (current) {
+            // Remove Idle listener before stopping to prevent double startPlayback()
+            // The Idle event fires when stop() is called, but we want to control
+            // the next startPlayback() call ourselves (or let the Idle handler do it once)
+            const player = this.audioPlayer.getPlayer(guildId);
+            if (player) {
+                player.removeAllListeners(AudioPlayerStatus.Idle);
+                player.removeAllListeners('error');
+            }
             this.audioPlayer.stop(guildId);
+            this.playbackStates.delete(guildId);
+            // Trigger next track manually
+            this.startPlayback(guildId);
         }
         return current;
     }
@@ -255,12 +338,20 @@ class MusicPlayerService extends BaseService {
      * @returns {Promise<void>}
      */
     async stop(guildId) {
+        // Remove listeners before stopping to prevent startPlayback() from firing
+        const player = this.audioPlayer.getPlayer(guildId);
+        if (player) {
+            player.removeAllListeners(AudioPlayerStatus.Idle);
+            player.removeAllListeners('error');
+        }
         this.queueManager.clear(guildId);
         this.audioPlayer.stop(guildId);
         this.voiceManager.leave(guildId);
         this.queueManager.removeQueue(guildId);
         this.audioPlayer.removePlayer(guildId);
         this.playbackStates.delete(guildId);
+        this._prefetchCache.delete(guildId);
+        this._volumeDefaults.delete(guildId);
         await this.clearSavedQueue(guildId);
     }
 
@@ -302,43 +393,49 @@ class MusicPlayerService extends BaseService {
     async setFilter(guildId, filter) {
         const success = this.queueManager.setFilter(guildId, filter);
         if (success) {
-            // Restart playback with new filter
+            // Restart playback with new filter if playing OR paused
             const current = this.queueManager.getCurrent(guildId);
-            if (current && this.audioPlayer.isPlaying(guildId)) {
-                // Stop current playback
+            const isActive = this.audioPlayer.isPlaying(guildId) || this.audioPlayer.isPaused(guildId);
+            if (current && isActive) {
+                // Capture current position before stopping
+                const currentPos = this.getCurrentPosition(guildId);
+
+                // Remove listeners before stopping to prevent double startPlayback()
+                const player = this.audioPlayer.getPlayer(guildId);
+                if (player) {
+                    player.removeAllListeners(AudioPlayerStatus.Idle);
+                    player.removeAllListeners('error');
+                }
+
                 this.audioPlayer.stop(guildId);
 
-                // Get player and play track with filter
-                const player = await this.audioPlayer.play(guildId, current, filter);
+                // Get new player and play track with filter from current position
+                const newPlayer = await this.audioPlayer.play(guildId, current, filter, currentPos);
                 const connection = this.voiceManager.get(guildId);
 
                 if (connection) {
-                    // Subscribe connection to player
-                    connection.connection.subscribe(player);
+                    connection.connection.subscribe(newPlayer);
 
-                    // Restore volume
                     const volume = this.queueManager.getVolume(guildId);
                     this.audioPlayer.setVolume(guildId, volume);
 
-                    // Track playback state
+                    // Reset playback state with adjusted start time
                     this.playbackStates.set(guildId, {
-                        startTime: Date.now(),
+                        startTime: Date.now() - (currentPos * 1000),
                         track: current,
+                        pausedAt: null,
                     });
 
-                    // Remove stale listeners before attaching new ones
-                    player.removeAllListeners(AudioPlayerStatus.Idle);
-                    player.removeAllListeners('error');
+                    newPlayer.removeAllListeners(AudioPlayerStatus.Idle);
+                    newPlayer.removeAllListeners('error');
 
-                    // Handle track end
-                    player.once(AudioPlayerStatus.Idle, () => {
+                    newPlayer.once(AudioPlayerStatus.Idle, () => {
                         this.log(`Track finished, playing next track`, 'info');
                         this.playbackStates.delete(guildId);
                         this.startPlayback(guildId);
                     });
 
-                    // Handle errors
-                    player.once('error', (error) => {
+                    newPlayer.once('error', (error) => {
                         this.log(`Player error: ${error.message}`, 'error');
                         this.playbackStates.delete(guildId);
                         this.startPlayback(guildId);
@@ -346,7 +443,6 @@ class MusicPlayerService extends BaseService {
                 }
             }
 
-            // Save queue state with new filter
             await this.saveQueue(guildId);
         }
         return success;
@@ -417,6 +513,7 @@ class MusicPlayerService extends BaseService {
             this.playbackStates.set(guildId, {
                 startTime: Date.now() - (position * 1000), // Adjust start time for seek position
                 track: current,
+                pausedAt: null,
             });
 
             // Remove stale listeners before attaching new ones
@@ -489,8 +586,16 @@ class MusicPlayerService extends BaseService {
     async jumpTo(guildId, position) {
         const track = this.queueManager.skipTo(guildId, position);
         if (track) {
+            // Remove listeners before stopping to prevent double startPlayback()
+            const player = this.audioPlayer.getPlayer(guildId);
+            if (player) {
+                player.removeAllListeners(AudioPlayerStatus.Idle);
+                player.removeAllListeners('error');
+            }
             this.audioPlayer.stop(guildId);
+            this.playbackStates.delete(guildId);
             await this.saveQueue(guildId);
+            await this.startPlayback(guildId);
         }
         return track;
     }
@@ -567,13 +672,14 @@ class MusicPlayerService extends BaseService {
             return 0;
         }
 
-        // Calculate elapsed time since playback started
-        const elapsed = Math.floor((Date.now() - playbackState.startTime) / 1000);
+        // If paused, use the time we paused at — don't keep counting
+        const referenceTime = playbackState.pausedAt || Date.now();
+        const elapsed = Math.floor((referenceTime - playbackState.startTime) / 1000);
 
-        // Ensure position doesn't exceed track duration
+        // Ensure position doesn't exceed track duration (duration is in ms)
         const current = this.queueManager.getCurrent(guildId);
-        if (current && elapsed > current.duration) {
-            return current.duration;
+        if (current && elapsed * 1000 > current.duration) {
+            return Math.floor(current.duration / 1000);
         }
 
         return Math.max(0, elapsed);
@@ -596,10 +702,10 @@ class MusicPlayerService extends BaseService {
 
             const playbackState = this.playbackStates.get(guildId);
 
-            // Calculate current position in track
+            // Calculate current position in track (handle paused state)
             let currentPosition = 0;
-            if (playbackState && this.audioPlayer.isPlaying(guildId)) {
-                currentPosition = Math.floor((Date.now() - playbackState.startTime) / 1000);
+            if (playbackState && (this.audioPlayer.isPlaying(guildId) || this.audioPlayer.isPaused(guildId))) {
+                currentPosition = this.getCurrentPosition(guildId);
             }
 
             const queueData = {

@@ -230,30 +230,31 @@ class HealthCheckService {
         const startTime = Date.now();
         const issues = [];
         let status = 'healthy';
+        let queryTime = null;
 
         try {
-            // Check if database is ready
-            if (!this.database.isReady()) {
+            const ready = this.database.isReady();
+
+            if (!ready) {
+                // Connection appears down — run ping to confirm and attempt recovery
                 issues.push('Database connection not ready');
                 status = 'unhealthy';
+
+                const queryStart = Date.now();
+                await this.database.query('SELECT 1 as test');
+                queryTime = Date.now() - queryStart;
+
+                // If ping succeeded, connection recovered
+                status = 'degraded';
+                issues.push(`Connection recovered after ping (${queryTime}ms)`);
             }
-
-            // Test database connection with a simple query
-            const queryStart = Date.now();
-            await this.database.query('SELECT 1 as test');
-            const queryTime = Date.now() - queryStart;
-
-            // Check query response time
-            if (queryTime > 1000) {
-                issues.push(`Slow database response: ${queryTime}ms`);
-                status = status === 'healthy' ? 'degraded' : status;
-            }
-
-            const responseTime = Date.now() - startTime;
+            // If isReady() is true, skip the remote ping entirely —
+            // a round-trip to Turso adds ~1-2s of latency for no benefit
+            // when the connection is already established.
 
             return {
                 status,
-                responseTime,
+                responseTime: Date.now() - startTime,
                 queryTime,
                 isConnected: this.database.isReady(),
                 issues,

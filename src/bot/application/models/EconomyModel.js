@@ -117,6 +117,7 @@ class EconomyModel extends Model {
 
     /**
      * Claim daily reward
+     * Uses atomic UPDATE with cooldown check to prevent concurrent double-claims.
      * @param {string} userId - User ID
      * @param {string} guildId - Guild ID
      * @returns {Promise<Object>} Result with success status and details
@@ -125,56 +126,48 @@ class EconomyModel extends Model {
         try {
             await this._ensureAccount(userId, guildId);
 
-            const account = await this.findOneBy({
-                guild_id: guildId,
-                user_id: userId
-            });
-
             const now = Math.floor(Date.now() / 1000);
-            const lastDaily = account.last_daily_at || 0;
-            const streak = account.daily_streak || 0;
-            const timeSinceLastDaily = now - lastDaily;
             const oneDaySeconds = 24 * 60 * 60;
 
-            // Check if already claimed today
+            // Read current state
+            const account = await this.findOneBy({ guild_id: guildId, user_id: userId });
+            const lastDaily = account.last_daily_at || 0;
+            const timeSinceLastDaily = now - lastDaily;
+
             if (timeSinceLastDaily < oneDaySeconds) {
-                return {
-                    success: false,
-                    timeLeft: oneDaySeconds - timeSinceLastDaily
-                };
+                return { success: false, timeLeft: oneDaySeconds - timeSinceLastDaily };
             }
 
-            // Calculate new streak
+            const streak = account.daily_streak || 0;
             const newStreak = timeSinceLastDaily < 2 * oneDaySeconds ? streak + 1 : 1;
-
-            // Calculate reward (base + streak bonus)
             const baseReward = 500;
             const streakBonus = Math.min(newStreak * 50, 500);
             const totalReward = baseReward + streakBonus;
 
-            // Update account
-            await this.updateBy(
-                { guild_id: guildId, user_id: userId },
-                {
-                    wallet_balance: (account.wallet_balance || 0) + totalReward,
-                    total_earned: (account.total_earned || 0) + totalReward,
-                    last_daily_at: now,
-                    daily_streak: newStreak,
-                    updated_at: now
-                }
+            // Atomic UPDATE — only succeeds if last_daily_at hasn't changed since we read it
+            // (guards against concurrent claims)
+            const result = await this.query(
+                `UPDATE ${this.tableName}
+                 SET wallet_balance = wallet_balance + ?,
+                     total_earned   = total_earned + ?,
+                     last_daily_at  = ?,
+                     daily_streak   = ?,
+                     updated_at     = ?
+                 WHERE guild_id = ? AND user_id = ?
+                   AND (last_daily_at IS NULL OR last_daily_at = ?)`,
+                [totalReward, totalReward, now, newStreak, now, guildId, userId, lastDaily]
             );
 
-            // Log transaction
+            if (!result || result.rowsAffected === 0) {
+                // Another concurrent request already claimed — re-read and return timeLeft
+                const fresh = await this.findOneBy({ guild_id: guildId, user_id: userId });
+                return { success: false, timeLeft: oneDaySeconds - (now - (fresh.last_daily_at || 0)) };
+            }
+
             await this._logTransaction(guildId, null, userId, totalReward, 'daily', `Daily reward (streak: ${newStreak})`);
 
             const newBalance = await this.getUserBalance(userId, guildId);
-
-            return {
-                success: true,
-                amount: totalReward,
-                streak: newStreak,
-                newBalance: newBalance.balance
-            };
+            return { success: true, amount: totalReward, streak: newStreak, newBalance: newBalance.balance };
         } catch (error) {
             this.log(`Error claiming daily for user ${userId}: ${error.message}`, 'error');
             throw error;
@@ -183,6 +176,7 @@ class EconomyModel extends Model {
 
     /**
      * Work to earn money
+     * Uses atomic UPDATE with cooldown check to prevent concurrent double-work.
      * @param {string} userId - User ID
      * @param {string} guildId - Guild ID
      * @returns {Promise<Object>} Result with success status and details
@@ -191,28 +185,18 @@ class EconomyModel extends Model {
         try {
             await this._ensureAccount(userId, guildId);
 
-            const account = await this.findOneBy({
-                guild_id: guildId,
-                user_id: userId
-            });
-
             const now = Math.floor(Date.now() / 1000);
-            const lastWork = account.last_work_at || 0;
-            const timeSinceLastWork = now - lastWork;
             const cooldownSeconds = 60 * 60; // 1 hour
 
-            // Check cooldown
+            const account = await this.findOneBy({ guild_id: guildId, user_id: userId });
+            const lastWork = account.last_work_at || 0;
+            const timeSinceLastWork = now - lastWork;
+
             if (timeSinceLastWork < cooldownSeconds) {
-                return {
-                    success: false,
-                    timeLeft: cooldownSeconds - timeSinceLastWork
-                };
+                return { success: false, timeLeft: cooldownSeconds - timeSinceLastWork };
             }
 
-            // Random work amount
             const amount = Math.floor(Math.random() * 200) + 100; // 100-300 coins
-
-            // Work messages
             const messages = [
                 'You worked as a developer and fixed some bugs!',
                 'You delivered packages around town!',
@@ -222,28 +206,27 @@ class EconomyModel extends Model {
             ];
             const message = messages[Math.floor(Math.random() * messages.length)];
 
-            // Update account
-            await this.updateBy(
-                { guild_id: guildId, user_id: userId },
-                {
-                    wallet_balance: (account.wallet_balance || 0) + amount,
-                    total_earned: (account.total_earned || 0) + amount,
-                    last_work_at: now,
-                    updated_at: now
-                }
+            // Atomic UPDATE — only succeeds if last_work_at hasn't changed since we read it
+            const result = await this.query(
+                `UPDATE ${this.tableName}
+                 SET wallet_balance = wallet_balance + ?,
+                     total_earned   = total_earned + ?,
+                     last_work_at   = ?,
+                     updated_at     = ?
+                 WHERE guild_id = ? AND user_id = ?
+                   AND (last_work_at IS NULL OR last_work_at = ?)`,
+                [amount, amount, now, now, guildId, userId, lastWork]
             );
 
-            // Log transaction
+            if (!result || result.rowsAffected === 0) {
+                const fresh = await this.findOneBy({ guild_id: guildId, user_id: userId });
+                return { success: false, timeLeft: cooldownSeconds - (now - (fresh.last_work_at || 0)) };
+            }
+
             await this._logTransaction(guildId, null, userId, amount, 'work', message);
 
             const newBalance = await this.getUserBalance(userId, guildId);
-
-            return {
-                success: true,
-                amount,
-                message,
-                newBalance: newBalance.balance
-            };
+            return { success: true, amount, message, newBalance: newBalance.balance };
         } catch (error) {
             this.log(`Error working for user ${userId}: ${error.message}`, 'error');
             throw error;
@@ -252,6 +235,7 @@ class EconomyModel extends Model {
 
     /**
      * Transfer money to another user
+     * Balance check is performed inside the transaction to prevent race conditions.
      * @param {string} fromUserId - Sender user ID
      * @param {string} toUserId - Receiver user ID
      * @param {string} guildId - Guild ID
@@ -260,24 +244,28 @@ class EconomyModel extends Model {
      */
     async transfer(fromUserId, toUserId, guildId, amount) {
         try {
-            // Get sender balance
-            const senderBalance = await this.getUserBalance(fromUserId, guildId);
-
-            if (senderBalance.balance < amount) {
-                return {
-                    success: false,
-                    message: 'Insufficient balance'
-                };
-            }
-
-            // Ensure both accounts exist
+            // Ensure both accounts exist before entering transaction
             await this._ensureAccount(fromUserId, guildId);
             await this._ensureAccount(toUserId, guildId);
 
             const now = Math.floor(Date.now() / 1000);
+            let newBalance = null;
 
-            // Use transaction for atomicity
             await this.db.transaction(async (db) => {
+                // Re-read sender balance inside transaction to prevent TOCTOU race
+                const senderRows = await db.query(
+                    `SELECT wallet_balance FROM ${this.tableName} WHERE guild_id = ? AND user_id = ?`,
+                    [guildId, fromUserId]
+                );
+                const senderBalance = senderRows?.[0]?.wallet_balance ?? 0;
+
+                if (senderBalance < amount) {
+                    // Signal insufficient balance via a thrown object caught below
+                    const err = new Error('INSUFFICIENT_BALANCE');
+                    err.code = 'INSUFFICIENT_BALANCE';
+                    throw err;
+                }
+
                 // Deduct from sender
                 await db.query(
                     `UPDATE ${this.tableName} 
@@ -298,19 +286,24 @@ class EconomyModel extends Model {
                     [amount, amount, now, guildId, toUserId]
                 );
 
+                // Capture new balance while still in transaction
+                const updatedRows = await db.query(
+                    `SELECT wallet_balance FROM ${this.tableName} WHERE guild_id = ? AND user_id = ?`,
+                    [guildId, fromUserId]
+                );
+                newBalance = updatedRows?.[0]?.wallet_balance ?? 0;
+
                 // Log transaction
                 await this._logTransaction(guildId, fromUserId, toUserId, amount, 'transfer', `Transfer from ${fromUserId} to ${toUserId}`);
             });
 
-            const newBalance = await this.getUserBalance(fromUserId, guildId);
-
             this.log(`Transferred ${amount} from ${fromUserId} to ${toUserId}`, 'info');
 
-            return {
-                success: true,
-                newBalance: newBalance.balance
-            };
+            return { success: true, newBalance };
         } catch (error) {
+            if (error.code === 'INSUFFICIENT_BALANCE') {
+                return { success: false, message: 'Insufficient balance' };
+            }
             this.log(`Error transferring money: ${error.message}`, 'error');
             throw error;
         }
@@ -318,6 +311,7 @@ class EconomyModel extends Model {
 
     /**
      * Deposit money to bank
+     * Balance check is performed atomically inside a single UPDATE to prevent race conditions.
      * @param {string} userId - User ID
      * @param {string} guildId - Guild ID
      * @param {number} amount - Amount to deposit
@@ -325,27 +319,23 @@ class EconomyModel extends Model {
      */
     async deposit(userId, guildId, amount) {
         try {
-            const balance = await this.getUserBalance(userId, guildId);
-
-            if (balance.balance < amount) {
-                return {
-                    success: false,
-                    message: 'Insufficient balance in wallet'
-                };
-            }
-
             await this._ensureAccount(userId, guildId);
 
             const now = Math.floor(Date.now() / 1000);
 
-            await this.query(
+            // Atomic: only update if wallet has sufficient funds
+            const result = await this.query(
                 `UPDATE ${this.tableName} 
                  SET wallet_balance = wallet_balance - ?, 
                      bank_balance = bank_balance + ?,
                      updated_at = ? 
-                 WHERE guild_id = ? AND user_id = ?`,
-                [amount, amount, now, guildId, userId]
+                 WHERE guild_id = ? AND user_id = ? AND wallet_balance >= ?`,
+                [amount, amount, now, guildId, userId, amount]
             );
+
+            if (!result || result.rowsAffected === 0) {
+                return { success: false, message: 'Insufficient balance in wallet' };
+            }
 
             return { success: true };
         } catch (error) {
@@ -356,6 +346,7 @@ class EconomyModel extends Model {
 
     /**
      * Withdraw money from bank
+     * Balance check is performed atomically inside a single UPDATE to prevent race conditions.
      * @param {string} userId - User ID
      * @param {string} guildId - Guild ID
      * @param {number} amount - Amount to withdraw
@@ -363,27 +354,23 @@ class EconomyModel extends Model {
      */
     async withdraw(userId, guildId, amount) {
         try {
-            const balance = await this.getUserBalance(userId, guildId);
-
-            if (balance.bank_balance < amount) {
-                return {
-                    success: false,
-                    message: 'Insufficient balance in bank'
-                };
-            }
-
             await this._ensureAccount(userId, guildId);
 
             const now = Math.floor(Date.now() / 1000);
 
-            await this.query(
+            // Atomic: only update if bank has sufficient funds
+            const result = await this.query(
                 `UPDATE ${this.tableName} 
                  SET wallet_balance = wallet_balance + ?, 
                      bank_balance = bank_balance - ?,
                      updated_at = ? 
-                 WHERE guild_id = ? AND user_id = ?`,
-                [amount, amount, now, guildId, userId]
+                 WHERE guild_id = ? AND user_id = ? AND bank_balance >= ?`,
+                [amount, amount, now, guildId, userId, amount]
             );
+
+            if (!result || result.rowsAffected === 0) {
+                return { success: false, message: 'Insufficient balance in bank' };
+            }
 
             return { success: true };
         } catch (error) {
@@ -466,26 +453,14 @@ class EconomyModel extends Model {
     }
 
     /**
-     * Ensure economy account exists for user
+     * Ensure economy account exists for user.
+     * Uses INSERT ... ON CONFLICT DO NOTHING to prevent TOCTOU race conditions.
      * @private
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @returns {Promise<void>}
      */
     async _ensureAccount(userId, guildId) {
         try {
-            const exists = await this.exists({
-                guild_id: guildId,
-                user_id: userId
-            });
-
-            if (exists) {
-                return;
-            }
-
             // Get starting balance from guild settings
-            let startingBalance = 1000; // Default
-
+            let startingBalance = 1000;
             try {
                 if (this.instance.client && this.instance.client.modules) {
                     const adminModule = this.instance.client.modules.get('admin');
@@ -506,51 +481,23 @@ class EconomyModel extends Model {
             const now = Math.floor(Date.now() / 1000);
             const accountId = `${guildId}-${userId}`;
 
-            // Ensure user profile exists to satisfy FK (fallback to minimal profile)
-            const profile = await this.query(
-                'SELECT user_id FROM user_profiles WHERE user_id = ?',
-                [userId]
+            // Ensure user profile exists (FK requirement)
+            await this.query(
+                `INSERT INTO user_profiles (user_id, username, discriminator, avatar_url, bot, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(user_id) DO NOTHING`,
+                [userId, String(userId), null, null, 0, now, now]
             );
 
-            if (!profile || profile.length === 0) {
-                await this.query(
-                    `INSERT INTO user_profiles (user_id, username, discriminator, avatar_url, bot, created_at, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                     ON CONFLICT(user_id) DO UPDATE SET
-                        username = excluded.username,
-                        discriminator = excluded.discriminator,
-                        avatar_url = excluded.avatar_url,
-                        bot = excluded.bot,
-                        updated_at = excluded.updated_at`,
-                    [
-                        userId,
-                        String(userId),
-                        null,
-                        null,
-                        0,
-                        now,
-                        now
-                    ]
-                );
-                this.log(`Inserted fallback user_profile for ${userId}`, 'warn');
-            }
-
-            await this.insert({
-                id: accountId,
-                guild_id: guildId,
-                user_id: userId,
-                wallet_balance: startingBalance,
-                bank_balance: 0,
-                total_earned: startingBalance,
-                total_spent: 0,
-                daily_streak: 0,
-                last_daily_at: null,
-                last_work_at: null,
-                created_at: now,
-                updated_at: now
-            });
-
-            this.log(`Created economy account for user ${userId} with starting balance ${startingBalance}`, 'info');
+            // Atomic upsert — safe against concurrent calls
+            await this.query(
+                `INSERT INTO ${this.tableName}
+                 (id, guild_id, user_id, wallet_balance, bank_balance, total_earned, total_spent,
+                  daily_streak, last_daily_at, last_work_at, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, 0, ?, 0, 0, NULL, NULL, ?, ?)
+                 ON CONFLICT(id) DO NOTHING`,
+                [accountId, guildId, userId, startingBalance, startingBalance, now, now]
+            );
         } catch (error) {
             this.log(`Error ensuring account: ${error.message}`, 'error');
             throw error;

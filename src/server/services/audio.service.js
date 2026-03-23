@@ -40,6 +40,9 @@ class AudioService extends BaseService {
         const needsProcessing = start > 0 || filter !== 'none';
         const sanitizedQuery = this.sanitizeQuery(query);
 
+        // In-flight deduplication key — same query+filter+start shares one setup
+        const inflightKey = `${sanitizedQuery}|${filter}|${start}`;
+
         this.log('info', 'Starting audio stream', {
             query, start, filter, format, fastPath: !!streamUrl && !needsProcessing,
         });
@@ -51,20 +54,16 @@ class AudioService extends BaseService {
         try {
             if (streamUrl && !needsProcessing) {
                 // ── Fast path ────────────────────────────────────────────────
-                // Direct CDN URL, no processing — stream via http/https.
-                // Falls back to slow path on CDN error.
                 try {
                     await this._streamFromUrl(streamUrl, response);
                 } catch (cdnErr) {
                     this.log('warn', 'Fast path CDN error, falling back to yt-dlp', {
                         error: cdnErr.message, query,
                     });
-                    await this._slowPathStream({ sanitizedQuery, response, needsProcessing: false, start, filter, format });
+                    await this._slowPathStream({ sanitizedQuery, inflightKey, response, needsProcessing: false, start, filter, format });
                 }
             } else if (streamUrl && needsProcessing) {
                 // ── Fast path + ffmpeg ───────────────────────────────────────
-                // Have CDN URL but need seek/filter — fetch URL stream → ffmpeg.
-                // Falls back to slow path on CDN error.
                 try {
                     const urlStream = await this._fetchUrlStream(streamUrl);
                     const processed = await this.ffmpegProvider.processAudio({
@@ -76,11 +75,11 @@ class AudioService extends BaseService {
                     this.log('warn', 'Fast path (ffmpeg) CDN error, falling back to yt-dlp', {
                         error: cdnErr.message, query,
                     });
-                    await this._slowPathStream({ sanitizedQuery, response, needsProcessing: true, start, filter, format });
+                    await this._slowPathStream({ sanitizedQuery, inflightKey, response, needsProcessing: true, start, filter, format });
                 }
             } else {
                 // ── Slow path ────────────────────────────────────────────────
-                await this._slowPathStream({ sanitizedQuery, response, needsProcessing, start, filter, format });
+                await this._slowPathStream({ sanitizedQuery, inflightKey, response, needsProcessing, start, filter, format });
             }
 
             this.log('info', 'Audio stream started successfully', { query, duration: Date.now() - t0 });
@@ -91,10 +90,22 @@ class AudioService extends BaseService {
 
     /**
      * Slow path: spawn yt-dlp, optionally pipe through ffmpeg.
+     * Uses inFlight map to avoid spawning multiple yt-dlp processes for the
+     * same query when concurrent requests arrive before the first one resolves.
      * @private
      */
-    async _slowPathStream({ sanitizedQuery, response, needsProcessing, start, filter, format }) {
-        const ytdlpStream = await this.ytdlpProvider.getAudioStream(sanitizedQuery);
+    async _slowPathStream({ sanitizedQuery, inflightKey, response, needsProcessing, start, filter, format }) {
+        // For concurrent identical slow-path requests, reuse the same yt-dlp stream
+        // promise so we only spawn once. Each caller still gets its own pipe.
+        let streamPromise = this.inFlight.get(inflightKey);
+        if (!streamPromise) {
+            streamPromise = this.ytdlpProvider.getAudioStream(sanitizedQuery).finally(() => {
+                this.inFlight.delete(inflightKey);
+            });
+            this.inFlight.set(inflightKey, streamPromise);
+        }
+
+        const ytdlpStream = await streamPromise;
 
         if (needsProcessing) {
             const processed = await this.ffmpegProvider.processAudio({
