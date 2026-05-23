@@ -7,7 +7,7 @@
 
 const Controller = require('../../system/core/Controller');
 const { EmbedBuilder } = require('discord.js');
-const { replyEphemeral, MessageFlags } = require('../../system/helpers/interaction_helper');
+const { replyEphemeral, MessageFlags } = require('../../system/helpers/InteractionHelper');
 
 class EconomyController extends Controller {
     /**

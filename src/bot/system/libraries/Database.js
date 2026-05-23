@@ -7,7 +7,7 @@
 
 const { createClient } = require('@libsql/client');
 const { DatabaseError } = require('../core/Errors');
-const { retryWithBackoff, shouldRetryError } = require('../helpers/retry_helper');
+const { retryWithBackoff, shouldRetryError } = require('../helpers/RetryHelper');
 const PreparedStatementCache = require('./PreparedStatementCache');
 const QueryPerformanceLogger = require('./QueryPerformanceLogger');
 const QueryOptimizer = require('./QueryOptimizer');
@@ -113,7 +113,7 @@ class DatabaseLibrary {
                     });
 
                     // Initialize database schema
-                    const { initializeSchema } = require('../helpers/database_helper');
+                    const { initializeSchema } = require('../helpers/DatabaseHelper');
                     await initializeSchema(this);
                 } catch (error) {
                     this.log(`Failed to connect to database: ${error.message}`, 'error');

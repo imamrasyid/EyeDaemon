@@ -59,6 +59,88 @@ class EconomyService extends BaseService {
     }
 
     /**
+     * Claim daily reward
+     * @param {string} userId - User ID
+     * @param {string} guildId - Guild ID
+     * @returns {Promise<Object>} Result with success status and details
+     */
+    async claimDaily(userId, guildId) {
+        this.validateRequired({ userId, guildId }, ['userId', 'guildId']);
+
+        try {
+            const result = await this.economyModel.claimDaily(userId, guildId);
+
+            this.log(`Daily claim for user ${userId}: ${result.success ? 'success' : 'cooldown'}`, 'info');
+
+            return result;
+        } catch (error) {
+            throw this.handleError(error, 'claimDaily', { userId, guildId });
+        }
+    }
+
+    /**
+     * Work to earn money
+     * @param {string} userId - User ID
+     * @param {string} guildId - Guild ID
+     * @returns {Promise<Object>} Result with success status and details
+     */
+    async work(userId, guildId) {
+        this.validateRequired({ userId, guildId }, ['userId', 'guildId']);
+
+        try {
+            const result = await this.economyModel.work(userId, guildId);
+
+            this.log(`Work for user ${userId}: ${result.success ? 'success' : 'cooldown'}`, 'info');
+
+            return result;
+        } catch (error) {
+            throw this.handleError(error, 'work', { userId, guildId });
+        }
+    }
+
+    /**
+     * Get economy leaderboard
+     * @param {string} guildId - Guild ID
+     * @param {string} type - Leaderboard type ('wallet', 'bank', 'total')
+     * @param {number} limit - Number of users to return
+     * @returns {Promise<Array>} Leaderboard data
+     */
+    async getLeaderboard(guildId, type = 'wallet', limit = 10) {
+        this.validateRequired({ guildId }, ['guildId']);
+
+        try {
+            const leaderboard = await this.economyModel.getLeaderboard(guildId, type, limit);
+
+            this.log(`Retrieved leaderboard for guild ${guildId}`, 'debug');
+
+            return leaderboard;
+        } catch (error) {
+            throw this.handleError(error, 'getLeaderboard', { guildId, type, limit });
+        }
+    }
+
+    /**
+     * Get transaction history
+     * @param {string} guildId - Guild ID
+     * @param {string} userId - User ID (optional)
+     * @param {number} limit - Number of transactions to return
+     * @returns {Promise<Array>} Transaction history
+     */
+    async getTransactionHistory(guildId, userId = null, limit = 50) {
+        this.validateRequired({ guildId }, ['guildId']);
+
+        try {
+            const history = await this.economyModel.getTransactionHistory(guildId, userId, limit);
+
+            this.log(`Retrieved transaction history for guild ${guildId}`, 'debug');
+
+            return history;
+        } catch (error) {
+            throw this.handleError(error, 'getTransactionHistory', { guildId, userId, limit });
+        }
+    }
+
+    /**
      * Add balance to user's wallet
      * @param {string} userId - User ID
      * @param {string} guildId - Guild ID

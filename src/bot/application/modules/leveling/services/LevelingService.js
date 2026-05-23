@@ -60,6 +60,77 @@ class LevelingService extends BaseService {
     }
 
     /**
+     * Add XP to multiple users (batch operation)
+     * @param {Array<Object>} updates - Array of {userId, guildId, xp} objects
+     * @returns {Promise<Array>} Array of level up results
+     */
+    async batchAddXP(updates) {
+        try {
+            if (!Array.isArray(updates) || updates.length === 0) {
+                throw new Error('Updates must be a non-empty array');
+            }
+
+            for (const update of updates) {
+                this.validateRequired(update, ['userId', 'guildId', 'xp']);
+                if (update.xp <= 0) {
+                    throw new Error('XP amount must be positive');
+                }
+            }
+
+            const results = await this.levelingModel.batchAddXP(updates);
+
+            this.log(`Batch added XP for ${updates.length} users`, 'debug');
+
+            return results;
+        } catch (error) {
+            throw this.handleError(error, 'batchAddXP', { count: updates?.length });
+        }
+    }
+
+    /**
+     * Add voice activity time
+     * @param {string} userId - User ID
+     * @param {string} guildId - Guild ID
+     * @param {number} minutes - Minutes to add
+     * @returns {Promise<void>}
+     */
+    async addVoiceTime(userId, guildId, minutes) {
+        try {
+            this.validateRequired({ userId, guildId, minutes }, ['userId', 'guildId', 'minutes']);
+
+            if (minutes <= 0) {
+                throw new Error('Minutes must be positive');
+            }
+
+            await this.levelingModel.addVoiceTime(userId, guildId, minutes);
+
+            this.log(`Added ${minutes} voice minutes for user ${userId} in guild ${guildId}`, 'debug');
+        } catch (error) {
+            throw this.handleError(error, 'addVoiceTime', { userId, guildId, minutes });
+        }
+    }
+
+    /**
+     * Get user rank in guild
+     * @param {string} userId - User ID
+     * @param {string} guildId - Guild ID
+     * @returns {Promise<number>} User rank (1-based)
+     */
+    async getUserRank(userId, guildId) {
+        try {
+            this.validateRequired({ userId, guildId }, ['userId', 'guildId']);
+
+            const rank = await this.levelingModel.getUserRank(userId, guildId);
+
+            this.log(`Retrieved rank ${rank} for user ${userId} in guild ${guildId}`, 'debug');
+
+            return rank;
+        } catch (error) {
+            throw this.handleError(error, 'getUserRank', { userId, guildId });
+        }
+    }
+
+    /**
      * Remove XP from user
      * @param {string} userId - User ID
      * @param {string} guildId - Guild ID

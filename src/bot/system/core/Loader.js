@@ -72,7 +72,7 @@ class Loader {
 
     /**
      * Load a helper
-     * @param {string} name - Helper name (e.g., 'format' for format_helper.js)
+     * @param {string} name - Helper name (e.g., 'format' for FormatHelper.js)
      */
     helper(name) {
         // Skip if already loaded
@@ -82,7 +82,9 @@ class Loader {
 
         try {
             // Load helper file from system/helpers
-            require(`../helpers/${name}_helper`);
+            // Convert name to PascalCase (e.g., 'format' -> 'FormatHelper')
+            const helperName = name.charAt(0).toUpperCase() + name.slice(1) + 'Helper';
+            require(`../helpers/${helperName}`);
 
             // Mark as loaded
             this.helpers.add(name);

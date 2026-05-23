@@ -260,49 +260,136 @@ Enable/disable features by setting these environment variables:
 
 ## 🏗️ Architecture
 
-### CodeIgniter-Inspired MVC Architecture
+### Modern MVC Architecture with Dependency Injection
 
-The bot follows a CodeIgniter-inspired MVC architecture with clear separation between framework code (system layer) and business logic (application layer):
+The bot follows a modern MVC architecture inspired by CodeIgniter with enhanced dependency injection and modular initialization:
 
 ```text
 src/bot/
 ├── system/              # Framework layer (core classes, libraries, helpers)
-│   ├── core/           # Base classes (Loader, Controller, Model)
-│   ├── libraries/      # Reusable components (VoiceManager, AudioPlayer)
-│   └── helpers/        # Utility functions (format, validation)
+│   ├── core/           # Base classes and infrastructure
+│   │   ├── Controller.js      # Base controller class
+│   │   ├── Model.js          # Base model class
+│   │   ├── BaseService.js    # Base service class
+│   │   ├── ServiceContainer.js  # Dependency injection container
+│   │   └── Loader.js         # Dynamic dependency loader
+│   ├── initialization/  # Modular initialization
+│   │   ├── CoreLibrariesInitializer.js  # Core libraries setup
+│   │   ├── ModuleLoader.js            # Module loading
+│   │   ├── EventLoader.js             # Event handler loading
+│   │   └── InteractionLoader.js       # Interaction handler loading
+│   ├── libraries/      # Reusable components
+│   │   ├── VoiceManager.js
+│   │   ├── AudioPlayer.js
+│   │   ├── QueueManager.js
+│   │   ├── Database.js
+│   │   ├── CacheManager.js
+│   │   └── ...
+│   ├── managers/       # System managers
+│   │   ├── EventManager.js
+│   │   ├── InteractionManager.js
+│   │   ├── CleanupManager.js
+│   │   └── ...
+│   └── helpers/        # Utility functions
+│       ├── LoggerHelper.js
+│       ├── FormatHelper.js
+│       ├── ValidationHelper.js
+│       └── ...
 │
 ├── application/        # Business logic layer
-│   ├── controllers/    # Command handlers (MusicController, EconomyController)
-│   ├── models/         # Data operations (MusicModel, EconomyModel)
-│   ├── modules/        # Module definitions (music, economy, leveling)
+│   ├── controllers/    # Command handlers
+│   │   ├── admin/
+│   │   │   └── handlers/  # Split handlers for admin commands
+│   │   │       ├── ConfigHandler.js
+│   │   │       ├── HealthHandler.js
+│   │   │       └── PerformanceHandler.js
+│   │   ├── music/
+│   │   │   └── handlers/  # Split handlers for music commands
+│   │   │       ├── PlaybackHandler.js
+│   │   │       ├── QueueHandler.js
+│   │   │       ├── SettingsHandler.js
+│   │   │       ├── PlaylistHandler.js
+│   │   │       └── EmbedBuilder.js
+│   │   ├── AdminController.js
+│   │   ├── MusicController.js
+│   │   ├── EconomyController.js
+│   │   └── ...
+│   ├── models/         # Data access layer (persistence only)
+│   │   ├── EconomyModel.js
+│   │   ├── LevelingModel.js
+│   │   ├── GuildModel.js
+│   │   └── ...
+│   ├── modules/        # Module definitions
+│   │   ├── music/
+│   │   │   ├── services/  # Business logic
+│   │   │   │   ├── MusicPlayerService.js
+│   │   │   │   └── PlaylistService.js
+│   │   │   ├── interactions/
+│   │   │   └── index.js
+│   │   ├── economy/
+│   │   │   ├── services/  # Business logic
+│   │   │   │   ├── EconomyService.js
+│   │   │   │   ├── GameService.js
+│   │   │   │   └── ShopService.js
+│   │   │   └── index.js
+│   │   ├── leveling/
+│   │   │   ├── services/  # Business logic
+│   │   │   │   ├── LevelingService.js
+│   │   │   │   └── RewardService.js
+│   │   │   └── index.js
+│   │   └── ...
+│   ├── services/       # Global services
+│   │   └── GuildInitializationService.js
+│   ├── events/         # Discord event handlers
+│   │   ├── Ready.js
+│   │   ├── MessageCreate.js
+│   │   └── ...
 │   └── config/         # Configuration files
+│       └── config.js
 │
-└── bootstrap.js        # Entry point and initialization
+├── migrations/         # Database migrations
+│   ├── 0001_initial_schema.js
+│   ├── 0002_fix_playlist_table_names.js
+│   └── 0003_optimize_cache_stats.js
+│
+└── bootstrap.js        # Entry point with modular initialization
 ```
 
-### Key Features
+### Key Architectural Improvements
 
-- **MVC Pattern**: Controllers handle commands, Models handle data
-- **Loader Pattern**: Automatic dependency loading and caching
-- **Clear Separation**: Framework code vs business logic
-- **Easy to Extend**: Add new features without modifying core
-- **Consistent Patterns**: Same approach across all modules
+- **Dependency Injection**: ServiceContainer manages service lifecycle and dependencies
+- **Modular Initialization**: Bootstrap split into focused initializer classes
+- **Separation of Concerns**: Models handle data access, Services handle business logic
+- **Handler Pattern**: Large controllers split into focused command handlers
+- **PascalCase Naming**: Consistent naming convention for all class files
+- **Service Layer**: Business logic encapsulated in service classes
+- **Turso Optimization**: Pre-computed statistics with triggers for performance
 
 ### Core Components
 
 #### System Layer (Framework)
 
+- **ServiceContainer**: Dependency injection container with automatic resolution
+- **CoreLibrariesInitializer**: Initializes database, cache, voice, and system services
+- **ModuleLoader**: Loads modules, services, and controllers dynamically
+- **EventLoader**: Loads Discord event handlers
+- **InteractionLoader**: Loads interaction handlers
 - **Loader**: Dynamic loading of models, libraries, and helpers
 - **Controller**: Base class for all command handlers
-- **Model**: Base class for all data operations
-- **Libraries**: Reusable components (VoiceManager, AudioPlayer, QueueManager)
-- **Helpers**: Utility functions (format, validation, logger)
+- **Model**: Base class for data operations (persistence only)
+- **BaseService**: Base class for business logic services
+- **Libraries**: Reusable components (VoiceManager, AudioPlayer, QueueManager, etc.)
+- **Managers**: System managers (EventManager, InteractionManager, CleanupManager)
+- **Helpers**: Utility functions (LoggerHelper, FormatHelper, ValidationHelper, etc.)
 
 #### Application Layer (Business Logic)
 
-- **Controllers**: Handle Discord commands and interactions
-- **Models**: Encapsulate data operations and business logic
-- **Modules**: Define features and command mappings
+- **Controllers**: Handle Discord commands and interactions (delegated to handlers)
+- **Handlers**: Focused command handlers for specific feature areas
+- **Models**: Data access layer (database operations only)
+- **Services**: Business logic layer (encapsulates complex operations)
+- **Modules**: Define features, services, and command mappings
+- **Events**: Discord event handlers
 - **Config**: Application configuration and settings
 
 ### Documentation
@@ -491,9 +578,11 @@ npm run stats
 
 ### Adding New Features
 
-The bot uses a CodeIgniter-inspired MVC architecture. To add new features:
+The bot uses a modern MVC architecture with dependency injection. To add new features:
 
-#### 1. Create a Model (Data Layer)
+#### 1. Create a Model (Data Access Layer)
+
+Models handle only data persistence - no business logic:
 
 ```javascript
 // application/models/MyModel.js
@@ -505,43 +594,98 @@ class MyModel extends Model {
   }
 
   async getData(id) {
-    return await this.db.get("SELECT * FROM table WHERE id = ?", [id]);
+    return await this.db.queryOne("SELECT * FROM table WHERE id = ?", [id]);
+  }
+
+  async createData(data) {
+    return await this.db.query("INSERT INTO table (col1, col2) VALUES (?, ?)", [
+      data.col1,
+      data.col2,
+    ]);
   }
 }
 
 module.exports = MyModel;
 ```
 
-#### 2. Create a Controller (Command Handler)
+#### 2. Create a Service (Business Logic Layer)
+
+Services encapsulate business logic and coordinate between models:
 
 ```javascript
-// application/controllers/MyController.js
-const Controller = require("../../system/core/Controller");
+// application/modules/mymodule/services/MyService.js
+const BaseService = require("../../../../system/core/BaseService");
 
-class MyController extends Controller {
-  constructor(client) {
-    super(client);
+class MyService extends BaseService {
+  constructor(client, options = {}) {
+    super(client, options);
+    this.myModel = null; // Loaded in initialize()
+  }
 
-    // Load dependencies
+  async initialize() {
     this.myModel = this.load.model("MyModel");
-    this.load.helper("format");
+  }
+
+  async processData(id) {
+    const data = await this.myModel.getData(id);
+    // Business logic here
+    return processedData;
+  }
+}
+
+module.exports = MyService;
+```
+
+#### 3. Create a Handler (Command Handler)
+
+Handlers handle specific commands, delegated from controllers:
+
+```javascript
+// application/controllers/mymodule/handlers/MyHandler.js
+class MyHandler {
+  constructor(controller) {
+    this.controller = controller;
+    this.myService = controller.client.services.get("MyService");
   }
 
   async myCommand(interaction) {
     try {
       await interaction.deferReply();
-      const data = await this.myModel.getData(interaction.user.id);
-      await interaction.editReply({ content: `✅ ${data}` });
+      const result = await this.myService.processData(interaction.user.id);
+      await interaction.editReply({ content: `✅ ${result}` });
     } catch (error) {
       await interaction.editReply({ content: `❌ ${error.message}` });
     }
   }
 }
 
+module.exports = MyHandler;
+```
+
+#### 4. Create a Controller (Delegates to Handlers)
+
+Controllers delegate to handlers for command execution:
+
+```javascript
+// application/controllers/MyController.js
+const Controller = require("../../system/core/Controller");
+const MyHandler = require("./handlers/MyHandler");
+
+class MyController extends Controller {
+  constructor(client) {
+    super(client);
+    this.myHandler = new MyHandler(this);
+  }
+
+  async myCommand(interaction) {
+    return this.myHandler.myCommand(interaction);
+  }
+}
+
 module.exports = MyController;
 ```
 
-#### 3. Create a Module Definition
+#### 5. Create a Module Definition
 
 ```javascript
 // application/modules/mymodule/index.js
@@ -549,7 +693,7 @@ module.exports = {
   name: "MyModule",
   description: "My module description",
   controllers: ["MyController"],
-  models: ["MyModel"],
+  services: ["MyService"],
   commands: [
     {
       name: "mycommand",
@@ -562,14 +706,10 @@ module.exports = {
 };
 ```
 
-#### 4. Register the Module
-
-Add your module to the bootstrap loading list in `bootstrap.js`.
-
 For detailed development guides, see:
 
 - **[Architecture Documentation](docs/ARCHITECTURE.md)** - Complete architecture guide
-- **[Migration Guide](docs/CODEIGNITER_MIGRATION_GUIDE.md)** - Detailed examples and patterns
+- **[API Documentation](docs/API.md)** - API reference and usage examples
 
 ### Database Schema
 
@@ -581,6 +721,19 @@ The bot uses a comprehensive database schema with tables for:
 - Moderation logs and warnings
 - User settings and preferences
 - Server configuration and permissions
+- Cache statistics (optimized with triggers for performance)
+
+### Recent Improvements
+
+The project has undergone a major refactoring to improve maintainability and performance:
+
+- **Dependency Injection**: Implemented ServiceContainer for automatic dependency resolution
+- **Modular Initialization**: Split bootstrap.js into focused initializer classes
+- **Service Layer**: Moved business logic from Models to Services for better separation of concerns
+- **Handler Pattern**: Split large controllers into focused command handlers
+- **Naming Convention**: Standardized to PascalCase for all class files
+- **Turso Optimization**: Added pre-computed cache statistics with triggers to avoid expensive COUNT queries
+- **Code Cleanup**: Removed unused files and updated all require statements
 
 ## 📚 Documentation
 

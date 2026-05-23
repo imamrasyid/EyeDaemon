@@ -485,6 +485,7 @@ module.exports = {
         await db.query('CREATE INDEX IF NOT EXISTS idx_tickets_guild ON tickets(guild_id)');
         await db.query('CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id)');
         await db.query('CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(guild_id, status)');
+        await db.query(`CREATE TABLE IF NOT EXISTS ticket_messages (
             id TEXT PRIMARY KEY,
             ticket_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
@@ -561,7 +562,7 @@ module.exports = {
             'user_profiles', 'guilds'
         ];
         for (const tbl of tables) {
-            await db.query(`DROP TABLE IF EXISTS ${ tbl } `);
+            await db.query(`DROP TABLE IF EXISTS ${tbl} `);
         }
     }
 };

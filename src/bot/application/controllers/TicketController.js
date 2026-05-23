@@ -7,7 +7,7 @@
 
 const Controller = require('../../system/core/Controller');
 const { EmbedBuilder, ChannelType, PermissionFlagsBits } = require('discord.js');
-const { deferEphemeral } = require('../../system/helpers/interaction_helper');
+const { deferEphemeral } = require('../../system/helpers/InteractionHelper');
 
 class TicketController extends Controller {
     /**

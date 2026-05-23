@@ -5,7 +5,7 @@
  */
 
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { formatDuration } = require('../../../../../system/helpers/format_helper');
+const { formatDuration } = require('../../../../../system/helpers/FormatHelper');
 
 /**
  * Update now playing message with current state

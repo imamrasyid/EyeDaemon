@@ -5,7 +5,7 @@
  * Handles CRUD operations and infraction queries with filtering.
  */
 
-const BaseService = require('../../../system/core/BaseService');
+const BaseService = require('../../../../system/core/BaseService');
 
 class InfractionService extends BaseService {
     /**

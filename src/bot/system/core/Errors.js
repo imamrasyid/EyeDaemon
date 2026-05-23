@@ -270,7 +270,7 @@ function formatErrorForUser(error) {
  * @param {Object} context - Additional context
  */
 function logError(error, context = {}) {
-    const logger = require('../helpers/logger_helper');
+    const logger = require('../helpers/LoggerHelper');
 
     logger.error(error.message, {
         name: error.name,

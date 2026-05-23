@@ -26,6 +26,5 @@ module.exports = {
     ],
     verbose: true,
     testTimeout: 30000, // Increased for property-based tests
-    maxWorkers: '50%', // Limit workers for concurrent tests
-    setupFilesAfterEnv: ['<rootDir>/src/bot/__tests__/setup.js']
+    maxWorkers: '50%' // Limit workers for concurrent tests
 };

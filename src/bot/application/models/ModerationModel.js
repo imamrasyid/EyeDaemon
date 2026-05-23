@@ -6,7 +6,7 @@
  */
 
 const Model = require('../../system/core/Model');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 
 class ModerationModel extends Model {
     /**
@@ -31,7 +31,7 @@ class ModerationModel extends Model {
      */
     async addWarning(userId, guildId, moderatorId, reason, expiresIn = null) {
         try {
-            const warningId = uuidv4();
+            const warningId = randomUUID();
             const now = Math.floor(Date.now() / 1000);
             const expiresAt = expiresIn ? now + expiresIn : null;
 
@@ -143,7 +143,7 @@ class ModerationModel extends Model {
      */
     async logAction(guildId, action, targetUserId, moderatorId, reason, duration = null, metadata = {}) {
         try {
-            const logId = uuidv4();
+            const logId = randomUUID();
             const now = Math.floor(Date.now() / 1000);
 
             await this.query(

@@ -6,7 +6,7 @@
  */
 
 const Model = require('../../system/core/Model');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 
 class TicketModel extends Model {
     /**
@@ -64,7 +64,7 @@ class TicketModel extends Model {
      */
     async createTicket(guildId, userId, channelId, category, description, ticketNumber) {
         try {
-            const ticketId = uuidv4();
+            const ticketId = randomUUID();
             const now = Math.floor(Date.now() / 1000);
 
             await this.insert({
@@ -313,7 +313,7 @@ class TicketModel extends Model {
      */
     async addTicketMessage(ticketId, userId, messageId, content, attachments = []) {
         try {
-            const messageRecordId = uuidv4();
+            const messageRecordId = randomUUID();
             const now = Math.floor(Date.now() / 1000);
 
             await this.query(
@@ -375,7 +375,7 @@ class TicketModel extends Model {
      */
     async createCategory(guildId, name, description = null, emoji = null, staffRoleIds = [], autoResponse = null) {
         try {
-            const categoryId = uuidv4();
+            const categoryId = randomUUID();
             const now = Math.floor(Date.now() / 1000);
 
             await this.query(

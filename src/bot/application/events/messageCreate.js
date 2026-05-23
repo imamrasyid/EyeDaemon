@@ -6,7 +6,7 @@
  */
 
 const BaseEvent = require('../../system/core/BaseEvent');
-const ArgumentParser = require('../../system/helpers/argument_parser_helper');
+const ArgumentParser = require('../../system/helpers/ArgumentParserHelper');
 
 class MessageCreateEvent extends BaseEvent {
     constructor(client) {

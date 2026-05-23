@@ -6,7 +6,7 @@
  */
 
 const BaseService = require('../../../../system/core/BaseService');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 
 class PlaylistService extends BaseService {
     /**
@@ -53,7 +53,7 @@ class PlaylistService extends BaseService {
             }
 
             // Create playlist
-            const playlistId = uuidv4();
+            const playlistId = randomUUID();
             const stmt = db.prepare(`
                 INSERT INTO music_playlists (id, guild_id, user_id, name, is_public, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)

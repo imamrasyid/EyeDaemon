@@ -1,6 +1,6 @@
 const { joinVoiceChannel, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
-const { retryWithBackoff } = require('../helpers/retry_helper');
-const logger = require('../helpers/logger_helper');
+const { retryWithBackoff } = require('../helpers/RetryHelper');
+const logger = require('../helpers/LoggerHelper');
 
 /**
  * VoiceManager Library

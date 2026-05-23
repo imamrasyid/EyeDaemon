@@ -6,7 +6,7 @@
  */
 
 const Model = require('../../system/core/Model');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 
 class EconomyModel extends Model {
     /**
@@ -517,7 +517,7 @@ class EconomyModel extends Model {
      */
     async _logTransaction(guildId, fromUserId, toUserId, amount, type, description) {
         try {
-            const transactionId = uuidv4();
+            const transactionId = randomUUID();
             const now = Math.floor(Date.now() / 1000);
 
             await this.query(

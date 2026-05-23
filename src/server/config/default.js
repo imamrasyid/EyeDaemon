@@ -20,6 +20,8 @@ module.exports = {
     audioFormat: process.env.YTDLP_AUDIO_FORMAT || '251/140/bestaudio[ext=m4a]/bestaudio',
     socketTimeout: parseInt(process.env.YTDLP_SOCKET_TIMEOUT) || 10, // 10 seconds
     extractorRetries: parseInt(process.env.YTDLP_EXTRACTOR_RETRIES) || 3,
+    ytdlpCookiesFile: process.env.YTDLP_COOKIES_FILE || null,
+    ytdlpCookiesBrowser: process.env.YTDLP_COOKIES_BROWSER || null,
 
     // Cache
     cache: {

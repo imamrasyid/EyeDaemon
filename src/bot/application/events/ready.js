@@ -58,7 +58,7 @@ class ReadyEvent extends BaseEvent {
         // Initialize automation service (skip if already initialized in bootstrap)
         try {
             if (!this.client.automationService) {
-                const AutomationService = require('../../system/services/automation_service');
+                const AutomationService = require('../../system/services/AutomationService');
                 this.client.automationService = new AutomationService(this.client);
                 this.log('Automation service initialized', 'info');
             }
@@ -70,7 +70,7 @@ class ReadyEvent extends BaseEvent {
 
         // Initialize guild management service
         try {
-            const GuildManagementService = require('../../system/services/guild_management_service');
+            const GuildManagementService = require('../../system/services/GuildManagementService');
             this.client.guildManagementService = new GuildManagementService(this.client);
             this.log('Guild management service initialized', 'info');
         } catch (error) {

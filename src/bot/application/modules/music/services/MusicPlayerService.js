@@ -967,7 +967,7 @@ class MusicPlayerService extends BaseService {
     async sendNowPlayingMessage(textChannel, track) {
         try {
             const { EmbedBuilder } = require('discord.js');
-            const { formatDuration } = require('../../../../system/helpers/format_helper');
+            const { formatDuration } = require('../../../../system/helpers/FormatHelper');
 
             const embed = new EmbedBuilder()
                 .setColor(0x00b894)

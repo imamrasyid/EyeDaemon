@@ -7,7 +7,7 @@
 
 const Controller = require('../../system/core/Controller');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
-const { replyEphemeral, deferEphemeral } = require('../../system/helpers/interaction_helper');
+const { replyEphemeral, deferEphemeral } = require('../../system/helpers/InteractionHelper');
 
 class ModerationController extends Controller {
     /**

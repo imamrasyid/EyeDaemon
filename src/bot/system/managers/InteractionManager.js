@@ -7,7 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const logger = require('../helpers/logger_helper');
+const logger = require('../helpers/LoggerHelper');
 
 class InteractionManager {
     /**

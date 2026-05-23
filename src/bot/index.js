@@ -6,8 +6,8 @@
  */
 
 const Bot = require('./bootstrap');
-const logger = require('./system/helpers/logger_helper');
-// const { ensureServerRunning } = require('./system/helpers/server_helper');
+const logger = require('./system/helpers/LoggerHelper');
+// const { ensureServerRunning } = require('./system/helpers/ServerHelper');
 
 /**
  * Main function to start the bot

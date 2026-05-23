@@ -1,5 +1,5 @@
 const logger = require('../utils/logger');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 
 /**
  * Request logging middleware
@@ -11,7 +11,7 @@ const { v4: uuidv4 } = require('uuid');
  */
 function requestLogger(req, res, next) {
     // Generate unique correlation ID for request tracking
-    req.correlationId = uuidv4();
+    req.correlationId = randomUUID();
 
     const startTime = Date.now();
 

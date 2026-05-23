@@ -7,8 +7,8 @@ const {
 } = require('@discordjs/voice');
 const axios = require('axios');
 const config = require('../../application/config/config');
-const { retryWithBackoff, isNetworkError } = require('../helpers/retry_helper');
-const logger = require('../helpers/logger_helper');
+const { retryWithBackoff, isNetworkError } = require('../helpers/RetryHelper');
+const logger = require('../helpers/LoggerHelper');
 const { AudioError } = require('../core/Errors');
 
 /**

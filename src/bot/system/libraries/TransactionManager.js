@@ -6,7 +6,7 @@
  */
 
 const { DatabaseError } = require('../core/Errors');
-const { retryWithBackoff, shouldRetryError } = require('../helpers/retry_helper');
+const { retryWithBackoff, shouldRetryError } = require('../helpers/RetryHelper');
 
 class TransactionManager {
     /**

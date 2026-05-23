@@ -5,7 +5,7 @@
  * Handles DM notifications and moderation logging.
  */
 
-const BaseService = require('../../../system/core/BaseService');
+const BaseService = require('../../../../system/core/BaseService');
 const { EmbedBuilder } = require('discord.js');
 
 class ModerationService extends BaseService {

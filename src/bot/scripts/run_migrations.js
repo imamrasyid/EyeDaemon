@@ -8,7 +8,7 @@ require('dotenv').config();
 const { createClient } = require('@libsql/client');
 const path = require('path');
 const MigrationManager = require('../system/database/MigrationManager');
-const logger = require('../system/helpers/logger_helper');
+const logger = require('../system/helpers/LoggerHelper');
 
 async function runMigrations() {
     try {

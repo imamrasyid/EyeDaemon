@@ -22,6 +22,10 @@ class YtdlpProvider {
         // Performance flags
         this.socketTimeout = config.get("socketTimeout", 10);
         this.extractorRetries = config.get("extractorRetries", 2);
+
+        // Authentication — cookies file takes priority over browser
+        this.cookiesFile = config.get("ytdlpCookiesFile", null);
+        this.cookiesBrowser = config.get("ytdlpCookiesBrowser", null);
     }
 
     /**
@@ -38,7 +42,7 @@ class YtdlpProvider {
      * @returns {string[]}
      */
     commonFlags() {
-        return [
+        const flags = [
             "--no-update",                          // Never check for updates (saves ~200-500ms)
             "--no-playlist",                        // Never expand playlists
             "--no-check-certificate",               // Skip SSL handshake overhead
@@ -49,6 +53,15 @@ class YtdlpProvider {
             "--no-warnings",
             "--quiet",
         ];
+
+        // Cookie auth — file takes priority over browser
+        if (this.cookiesFile) {
+            flags.push("--cookies", this.cookiesFile);
+        } else if (this.cookiesBrowser) {
+            flags.push("--cookies-from-browser", this.cookiesBrowser);
+        }
+
+        return flags;
     }
 
     /**

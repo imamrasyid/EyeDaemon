@@ -6,7 +6,7 @@
  */
 
 const Model = require('../../system/core/Model');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 
 class UtilityModel extends Model {
     /**
@@ -115,7 +115,7 @@ class UtilityModel extends Model {
      */
     async createReactionRole(guildId, messageId, channelId, emoji, roleId, description = null) {
         try {
-            const reactionRoleId = uuidv4();
+            const reactionRoleId = randomUUID();
             const now = Math.floor(Date.now() / 1000);
 
             await this.query(
@@ -248,7 +248,7 @@ class UtilityModel extends Model {
      */
     async createAutoRole(guildId, roleId, conditionType, conditionData = {}) {
         try {
-            const autoRoleId = uuidv4();
+            const autoRoleId = randomUUID();
             const now = Math.floor(Date.now() / 1000);
 
             await this.query(
@@ -375,7 +375,7 @@ class UtilityModel extends Model {
      */
     async logEvent(guildId, eventType, userId = null, channelId = null, eventData = {}) {
         try {
-            const eventId = uuidv4();
+            const eventId = randomUUID();
             const now = Math.floor(Date.now() / 1000);
 
             await this.query(

@@ -6,7 +6,7 @@
  */
 
 const BaseEvent = require('../../system/core/BaseEvent');
-const { replyEphemeral } = require('../../system/helpers/interaction_helper');
+const { replyEphemeral } = require('../../system/helpers/InteractionHelper');
 
 class InteractionCreateEvent extends BaseEvent {
     constructor(client) {
