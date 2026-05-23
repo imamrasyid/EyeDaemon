@@ -115,7 +115,17 @@ class YtdlpProvider {
                     // result.webpage_url is the YouTube watch page — NOT streamable.
                     // Only attach streamUrl if it's a real CDN URL (not a youtube.com URL).
                     const rawUrl = result.url || '';
-                    const isDirectCdn = rawUrl && !rawUrl.includes('youtube.com') && !rawUrl.includes('youtu.be');
+                    let isDirectCdn = false;
+                    if (rawUrl) {
+                        try {
+                            const urlObj = new URL(rawUrl);
+                            const hostname = urlObj.hostname.toLowerCase();
+                            isDirectCdn = !hostname.includes('youtube.com') && !hostname.includes('youtu.be');
+                        } catch (e) {
+                            // Invalid URL, treat as not direct CDN
+                            isDirectCdn = false;
+                        }
+                    }
                     result.streamUrl = isDirectCdn ? rawUrl : null;
 
                     logger.debug("yt-dlp metadata fetched", { query, title: result.title });
