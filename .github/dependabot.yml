@@ -1,0 +1,74 @@
+# Dependabot configuration for EyeDaemon Discord Bot
+# See documentation: https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # npm dependencies for the main project
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Jakarta"
+    open-pull-requests-limit: 10
+    target-branch: "master"
+    labels:
+      - "dependencies"
+      - "npm"
+    commit-message:
+      prefix: "deps"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
+    versioning-strategy: increase
+    allow:
+      # Allow updates for all dependencies
+      - dependency-type: "all"
+    ignore:
+      # Ignore major version updates for critical packages to prevent breaking changes
+      - dependency-name: "discord.js"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@discordjs/voice"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@discordjs/rest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "express"
+        update-types: ["version-update:semver-major"]
+    groups:
+      # Group Discord.js related packages
+      discord-js:
+        patterns:
+          - "discord.js"
+          - "@discordjs/*"
+          - "discord-api-types"
+      # Group Express and server-related packages
+      express:
+        patterns:
+          - "express"
+          - "cors"
+          - "helmet"
+          - "morgan"
+          - "express-rate-limit"
+      # Group database packages
+      database:
+        patterns:
+          - "@libsql/client"
+      # Group audio/music packages
+      audio:
+        patterns:
+          - "@discordjs/voice"
+          - "ffmpeg-static"
+          - "opusscript"
+          - "yt-dlp-exec"
+      # Group logging packages
+      logging:
+        patterns:
+          - "winston"
+          - "pino"
+          - "pino-pretty"
+      # Group HTTP client packages
+      http:
+        patterns:
+          - "axios"
+          - "node-fetch"
+          - "undici"
