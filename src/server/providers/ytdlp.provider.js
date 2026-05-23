@@ -120,7 +120,15 @@ class YtdlpProvider {
                         try {
                             const urlObj = new URL(rawUrl);
                             const hostname = urlObj.hostname.toLowerCase();
-                            isDirectCdn = !hostname.includes('youtube.com') && !hostname.includes('youtu.be');
+                            // Check exact hostname match or subdomain match to prevent bypass
+                            const isYoutubeDomain =
+                                hostname === 'youtube.com' ||
+                                hostname === 'www.youtube.com' ||
+                                hostname === 'youtu.be' ||
+                                hostname === 'www.youtu.be' ||
+                                hostname.endsWith('.youtube.com') ||
+                                hostname.endsWith('.youtu.be');
+                            isDirectCdn = !isYoutubeDomain;
                         } catch (e) {
                             // Invalid URL, treat as not direct CDN
                             isDirectCdn = false;
