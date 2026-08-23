@@ -55,17 +55,9 @@ class ReadyEvent extends BaseEvent {
         // Start periodic health checks
         this.startHealthChecks();
 
-        // Initialize automation service (skip if already initialized in bootstrap)
-        try {
-            if (!this.client.automationService) {
-                const AutomationService = require('../../system/services/AutomationService');
-                this.client.automationService = new AutomationService(this.client);
-                this.log('Automation service initialized', 'info');
-            }
-        } catch (error) {
-            this.log('Failed to initialize automation service', 'warn', {
-                error: error.message,
-            });
+        // Automation service is initialized during bootstrap; just ensure reference
+        if (this.client.automationService) {
+            this.log('Automation service ready', 'debug');
         }
 
         // Initialize guild management service

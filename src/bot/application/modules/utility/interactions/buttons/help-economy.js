@@ -6,6 +6,7 @@
 
 const BaseInteraction = require('../../../../../system/core/BaseInteraction');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const ResponseHelper = require('../../../../../system/helpers/ResponseHelper');
 
 class HelpEconomyButton extends BaseInteraction {
     constructor(client) {
@@ -29,11 +30,11 @@ class HelpEconomyButton extends BaseInteraction {
             const commandFields = this.formatCommands(commands);
 
             const embed = new EmbedBuilder()
-                .setColor(0xf1c40f)
-                .setTitle('💰 Economy Commands')
-                .setDescription('Manage your currency, play games, and shop')
+                .setColor(ResponseHelper.THEMES.ECONOMY)
+                .setTitle('💰 Economy & Casino Commands')
+                .setDescription('Manage your wallet, play Blackjack, buy shop items, and check inventory')
                 .addFields(commandFields)
-                .setFooter({ text: 'Click a category button to view other commands' })
+                .setFooter({ text: 'EyeDaemon Economy System • Click Back to view other categories' })
                 .setTimestamp();
 
             // Create back button

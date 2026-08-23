@@ -686,23 +686,46 @@ class MusicPlayerService extends BaseService {
     }
 
     /**
-     * Save queue state to database
+     * Save queue state to database with debouncing to prevent redundant network I/O
      * @param {string} guildId - Guild ID
      * @returns {Promise<void>}
      */
     async saveQueue(guildId) {
+        if (!this._saveQueueDebounceTimers) {
+            this._saveQueueDebounceTimers = new Map();
+        }
+
+        if (this._saveQueueDebounceTimers.has(guildId)) {
+            clearTimeout(this._saveQueueDebounceTimers.get(guildId));
+        }
+
+        return new Promise((resolve) => {
+            const timer = setTimeout(async () => {
+                this._saveQueueDebounceTimers.delete(guildId);
+                try {
+                    await this._executeSaveQueue(guildId);
+                } catch (err) {
+                    this.log(`Error in debounced saveQueue: ${err.message}`, 'warn');
+                }
+                resolve();
+            }, 1000);
+
+            this._saveQueueDebounceTimers.set(guildId, timer);
+        });
+    }
+
+    /**
+     * Execute actual saveQueue write to database
+     * @private
+     */
+    async _executeSaveQueue(guildId) {
         try {
             const queue = this.queueManager.getQueue(guildId);
-
-            // Validate queue exists and has data (current track OR upcoming tracks)
             if (!queue || (!queue.current && (!queue.tracks || queue.tracks.length === 0))) {
-                this.log(`No valid queue to save for guild ${guildId}`, 'debug');
                 return;
             }
 
             const playbackState = this.playbackStates.get(guildId);
-
-            // Calculate current position in track (handle paused state)
             let currentPosition = 0;
             if (playbackState && (this.audioPlayer.isPlaying(guildId) || this.audioPlayer.isPaused(guildId))) {
                 currentPosition = this.getCurrentPosition(guildId);
@@ -717,46 +740,19 @@ class MusicPlayerService extends BaseService {
                 filter: queue.filter || 'none',
             };
 
-            // Validate queueData before stringifying
-            if (!queueData.tracks || !Array.isArray(queueData.tracks)) {
-                this.log(`Invalid queue data for guild ${guildId}, skipping save`, 'warn');
-                return;
-            }
-
             const db = this.getDatabase();
             if (!db) return;
 
-            // Stringify and validate JSON
-            let queueDataJson;
-            try {
-                queueDataJson = JSON.stringify(queueData);
-                // Validate it can be parsed back
-                JSON.parse(queueDataJson);
-            } catch (jsonError) {
-                this.log(`Failed to serialize queue data for guild ${guildId}: ${jsonError.message}`, 'error');
-                return;
-            }
+            const queueDataJson = JSON.stringify(queueData);
+            const now = Math.floor(Date.now() / 1000);
 
-            // Upsert queue state
-            const stmt = db.prepare(`
-                INSERT INTO music_queue_state (guild_id, queue_data, current_position, loop_mode, volume, filter, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(guild_id) DO UPDATE SET
-                    queue_data = excluded.queue_data,
-                    current_position = excluded.current_position,
-                    loop_mode = excluded.loop_mode,
-                    volume = excluded.volume,
-                    filter = excluded.filter,
-                    updated_at = CURRENT_TIMESTAMP
-            `);
-
-            stmt.run(
-                guildId,
-                queueDataJson,
-                currentPosition,
-                queue.loop,
-                queue.volume,
-                queue.filter || 'none'
+            await db.query(
+                `INSERT INTO queue_state (guild_id, data_json, updated_at)
+                 VALUES (?, ?, ?)
+                 ON CONFLICT(guild_id) DO UPDATE SET
+                    data_json = excluded.data_json,
+                    updated_at = excluded.updated_at`,
+                [guildId, queueDataJson, now]
             );
 
             this.log(`Saved queue state for guild ${guildId}`, 'debug');
@@ -775,65 +771,33 @@ class MusicPlayerService extends BaseService {
             const db = this.getDatabase();
             if (!db) return null;
 
-            const stmt = db.prepare(`
-                SELECT queue_data, current_position, loop_mode, volume, filter
-                FROM music_queue_state
-                WHERE guild_id = ?
-            `);
+            const rows = await db.query(
+                `SELECT data_json, updated_at FROM queue_state WHERE guild_id = ?`,
+                [guildId]
+            );
 
-            const row = stmt.get(guildId);
-            if (!row) {
-                // No saved queue - this is normal, not an error
-                this.log(`No saved queue found for guild ${guildId}`, 'debug');
-                return null;
-            }
-
-            // Check if queue_data is empty/null (normal - no queue saved)
-            if (!row.queue_data) {
-                this.log(`No queue data for guild ${guildId}`, 'debug');
-                return null;
-            }
-
-            // Check for corrupt data (string "undefined" or "null" - this is a problem)
-            if (row.queue_data === 'undefined' || row.queue_data === 'null') {
-                this.log(`Corrupt queue_data for guild ${guildId} (string "${row.queue_data}"), cleaning up`, 'warn');
-                // Clean up corrupt entry
-                await this.clearSavedQueue(guildId);
-                return null;
-            }
+            const row = rows?.[0];
+            if (!row || !row.data_json) return null;
 
             let queueData;
             try {
-                queueData = JSON.parse(row.queue_data);
-            } catch (parseError) {
-                this.log(`Failed to parse queue_data for guild ${guildId}: ${parseError.message}, cleaning up`, 'error');
-                // Clean up corrupt entry
+                queueData = JSON.parse(row.data_json);
+            } catch {
                 await this.clearSavedQueue(guildId);
                 return null;
             }
 
-            // Validate parsed data structure
-            if (!queueData || typeof queueData !== 'object') {
-                this.log(`Invalid queue_data structure for guild ${guildId}, cleaning up`, 'warn');
-                // Clean up corrupt entry
+            if (!queueData || !Array.isArray(queueData.tracks)) {
                 await this.clearSavedQueue(guildId);
                 return null;
             }
-
-            // Check if queue has tracks (if not, it's empty - normal)
-            if (!queueData.tracks || !Array.isArray(queueData.tracks) || queueData.tracks.length === 0) {
-                this.log(`Empty queue for guild ${guildId}`, 'debug');
-                return null;
-            }
-
-            this.log(`Loaded queue state for guild ${guildId}`, 'debug');
 
             return {
                 ...queueData,
-                currentPosition: row.current_position,
-                loopMode: row.loop_mode,
-                volume: row.volume,
-                filter: row.filter,
+                currentPosition: queueData.currentPosition || 0,
+                loopMode: queueData.loopMode || 'off',
+                volume: queueData.volume || 80,
+                filter: queueData.filter || 'none',
             };
         } catch (error) {
             this.handleError(error, 'loadQueue');
@@ -851,9 +815,7 @@ class MusicPlayerService extends BaseService {
             const db = this.getDatabase();
             if (!db) return;
 
-            const stmt = db.prepare('DELETE FROM music_queue_state WHERE guild_id = ?');
-            stmt.run(guildId);
-
+            await db.query('DELETE FROM queue_state WHERE guild_id = ?', [guildId]);
             this.log(`Cleared saved queue for guild ${guildId}`, 'debug');
         } catch (error) {
             this.handleError(error, 'clearSavedQueue');
@@ -867,64 +829,29 @@ class MusicPlayerService extends BaseService {
     async cleanupCorruptQueues() {
         try {
             const db = this.getDatabase();
-            if (!db) {
-                this.log('Database not available, skipping cleanup', 'warn');
-                return 0;
-            }
+            if (!db) return 0;
 
-            this.log('Scanning for corrupt queue states...', 'debug');
-
-            // Get all queue states using BaseService query method
-            const rows = await this.query('SELECT guild_id, queue_data FROM music_queue_state');
-
-            if (!rows || !Array.isArray(rows) || rows.length === 0) {
-                this.log('No queue states in database', 'debug');
-                return 0;
-            }
+            const rows = await db.query('SELECT guild_id, data_json FROM queue_state');
+            if (!rows || rows.length === 0) return 0;
 
             let corruptCount = 0;
-            const corruptGuildIds = [];
-
             for (const row of rows) {
                 let isCorrupt = false;
-
-                // Only check for CORRUPT data, not empty data
-                // Empty/null is normal and should not be flagged as corrupt
-
-                if (row.queue_data === 'undefined' || row.queue_data === 'null') {
-                    // String "undefined" or "null" is corrupt
+                if (!row.data_json || row.data_json === 'undefined' || row.data_json === 'null') {
                     isCorrupt = true;
-                } else if (row.queue_data) {
-                    // Has data - try to parse
+                } else {
                     try {
-                        const parsed = JSON.parse(row.queue_data);
-                        if (!parsed || typeof parsed !== 'object') {
-                            isCorrupt = true;
-                        }
-                        // Note: Empty tracks array is OK, not corrupt
-                    } catch (error) {
-                        // Parse error = corrupt
+                        const parsed = JSON.parse(row.data_json);
+                        if (!parsed || typeof parsed !== 'object') isCorrupt = true;
+                    } catch {
                         isCorrupt = true;
                     }
                 }
-                // If queue_data is null/empty, it's NOT corrupt, just empty
 
                 if (isCorrupt) {
-                    corruptGuildIds.push(row.guild_id);
+                    await db.query('DELETE FROM queue_state WHERE guild_id = ?', [row.guild_id]);
                     corruptCount++;
                 }
-            }
-
-            // Delete corrupt entries
-            if (corruptGuildIds.length > 0) {
-                this.log(`Found ${corruptCount} corrupt queue states, cleaning up...`, 'warn');
-                for (const guildId of corruptGuildIds) {
-                    await this.query('DELETE FROM music_queue_state WHERE guild_id = ?', [guildId]);
-                    this.log(`Removed corrupt queue state for guild ${guildId}`, 'debug');
-                }
-                this.log(`Cleanup complete: ${corruptCount} corrupt queue states removed`, 'info');
-            } else {
-                this.log('No corrupt queue states found', 'debug');
             }
 
             return corruptCount;
@@ -943,14 +870,10 @@ class MusicPlayerService extends BaseService {
             const db = this.getDatabase();
             if (!db) return;
 
-            const stmt = db.prepare(`
-                DELETE FROM music_queue_state
-                WHERE updated_at < datetime('now', '-24 hours')
-            `);
+            const cutoff = Math.floor(Date.now() / 1000) - (24 * 60 * 60);
+            const result = await db.query('DELETE FROM queue_state WHERE updated_at < ?', [cutoff]);
 
-            const result = stmt.run();
-
-            if (result.changes > 0) {
+            if (result?.changes > 0) {
                 this.log(`Cleaned up ${result.changes} expired queue states`, 'info');
             }
         } catch (error) {
@@ -966,21 +889,33 @@ class MusicPlayerService extends BaseService {
      */
     async sendNowPlayingMessage(textChannel, track) {
         try {
-            const { EmbedBuilder } = require('discord.js');
-            const { formatDuration } = require('../../../../system/helpers/FormatHelper');
+            const ResponseHelper = require('../../../../system/helpers/ResponseHelper');
+            const queue = this.getQueue(textChannel.guild.id);
+            const durationSecs = track.duration > 10000 ? Math.floor(track.duration / 1000) : (track.duration || 180);
 
-            const embed = new EmbedBuilder()
-                .setColor(0x00b894)
-                .setTitle('🎵 Now Playing')
-                .setDescription(`[${track.title}](${track.url})`)
-                .addFields(
-                    { name: 'Duration', value: formatDuration(track.duration), inline: true },
-                    { name: 'Requested By', value: `<@${track.requestedBy.id}>`, inline: true }
-                )
-                .setThumbnail(track.thumbnail)
-                .setTimestamp();
+            const embed = ResponseHelper.nowPlayingCard({
+                track: {
+                    title: track.title,
+                    author: track.author || track.uploader || 'Unknown Artist',
+                    url: track.url,
+                    thumbnail: track.thumbnail,
+                    duration: durationSecs,
+                    requestedBy: track.requestedBy?.id || track.requestedBy,
+                },
+                queue: queue || {},
+                position: 0,
+                isPaused: false,
+                loopMode: queue?.loop || 'off',
+                volume: queue?.volume || 80,
+                filter: queue?.filter || 'none',
+            });
 
-            await textChannel.send({ embeds: [embed] });
+            const buttons = ResponseHelper.musicControlsRow({
+                isPaused: false,
+                loopMode: queue?.loop || 'off',
+            });
+
+            await textChannel.send({ embeds: [embed], components: buttons });
         } catch (error) {
             this.handleError(error, 'sendNowPlayingMessage');
         }

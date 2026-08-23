@@ -1,18 +1,15 @@
+'use strict';
+
 /**
  * EconomyModel
  * 
- * Model for managing economy data including balance, transactions, and shop.
- * Updated for new Turso DB schema with separate tables for accounts, transactions, shop items, and inventories.
+ * Manages economy data: economy_accounts, economy_transactions, economy_cooldowns.
+ * Synchronized with consolidated schema.
  */
 
 const Model = require('../../system/core/Model');
-const { randomUUID } = require('crypto');
 
 class EconomyModel extends Model {
-    /**
-     * Create a new EconomyModel instance
-     * @param {Object} instance - The parent instance
-     */
     constructor(instance) {
         super(instance);
         this.tableName = 'economy_accounts';
@@ -22,50 +19,36 @@ class EconomyModel extends Model {
      * Get user balance
      * @param {string} userId - User ID
      * @param {string} guildId - Guild ID
-     * @returns {Promise<Object>} Balance information
+     * @returns {Promise<Object>}
      */
     async getUserBalance(userId, guildId) {
         try {
-            const account = await this.findOneBy({
-                guild_id: guildId,
-                user_id: userId
-            });
+            const rows = await this.query(
+                `SELECT balance, bank_balance, last_daily, last_weekly, created_at, updated_at
+                 FROM economy_accounts
+                 WHERE user_id = ? AND guild_id = ?`,
+                [userId, guildId]
+            );
 
-            if (account) {
+            if (rows && rows.length > 0) {
+                const row = rows[0];
                 return {
-                    balance: account.wallet_balance || 0,
-                    bank_balance: account.bank_balance || 0,
-                    total_earned: account.total_earned || 0,
-                    total_spent: account.total_spent || 0
+                    balance: row.balance || 0,
+                    bank_balance: row.bank_balance || 0,
+                    total: (row.balance || 0) + (row.bank_balance || 0),
+                    last_daily: row.last_daily,
+                    last_weekly: row.last_weekly,
                 };
             }
 
-            // Get starting balance from guild settings for default
-            let startingBalance = 1000; // Default
-
-            try {
-                if (this.instance.client && this.instance.client.modules) {
-                    const adminModule = this.instance.client.modules.get('admin');
-                    if (adminModule) {
-                        const guildConfigService = adminModule.getService('GuildConfigService');
-                        if (guildConfigService) {
-                            const configuredBalance = await guildConfigService.getSetting(guildId, 'economy_starting_balance');
-                            if (configuredBalance !== undefined && configuredBalance !== null) {
-                                startingBalance = configuredBalance;
-                            }
-                        }
-                    }
-                }
-            } catch (error) {
-                this.log(`Error getting starting balance from config: ${error.message}`, 'warn');
-            }
-
-            // Return default balance if not found
+            // Default starting balance if not created yet
+            const defaultStarting = 1000;
             return {
-                balance: startingBalance,
+                balance: defaultStarting,
                 bank_balance: 0,
-                total_earned: 0,
-                total_spent: 0
+                total: defaultStarting,
+                last_daily: null,
+                last_weekly: null,
             };
         } catch (error) {
             this.log(`Error getting balance for user ${userId}: ${error.message}`, 'error');
@@ -78,36 +61,39 @@ class EconomyModel extends Model {
      * @param {string} userId - User ID
      * @param {string} guildId - Guild ID
      * @param {number} amount - Amount to add (negative to subtract)
-     * @param {string} type - Balance type ('wallet' or 'bank')
+     * @param {string} type - 'balance' (wallet) or 'bank_balance' (bank)
      * @param {string} transactionType - Transaction type for logging
-     * @param {string} description - Transaction description
-     * @returns {Promise<boolean>} Success status
+     * @param {string} reason - Transaction reason
+     * @returns {Promise<boolean>}
      */
-    async updateBalance(userId, guildId, amount, type = 'wallet', transactionType = 'adjustment', description = null) {
+    async updateBalance(userId, guildId, amount, type = 'balance', transactionType = 'adjustment', reason = null) {
         try {
-            // Ensure account exists
             await this._ensureAccount(userId, guildId);
 
-            const column = type === 'wallet' ? 'wallet_balance' : 'bank_balance';
+            const column = type === 'bank_balance' || type === 'bank' ? 'bank_balance' : 'balance';
             const now = Math.floor(Date.now() / 1000);
 
-            // Atomic balance update
-            const result = await this.query(
-                `UPDATE ${this.tableName} 
+            // Read current balance before
+            const beforeRows = await this.query(
+                `SELECT balance, bank_balance FROM economy_accounts WHERE user_id = ? AND guild_id = ?`,
+                [userId, guildId]
+            );
+            const currentBalance = beforeRows?.[0]?.[column] || 0;
+            const newBalance = currentBalance + amount;
+
+            await this.query(
+                `UPDATE economy_accounts 
                  SET ${column} = ${column} + ?, 
-                     total_earned = total_earned + CASE WHEN ? > 0 THEN ? ELSE 0 END,
-                     total_spent = total_spent + CASE WHEN ? < 0 THEN ABS(?) ELSE 0 END,
                      updated_at = ? 
-                 WHERE guild_id = ? AND user_id = ?`,
-                [amount, amount, amount, amount, amount, now, guildId, userId]
+                 WHERE user_id = ? AND guild_id = ?`,
+                [amount, now, userId, guildId]
             );
 
             // Log transaction
             if (amount !== 0) {
-                await this._logTransaction(guildId, userId, null, amount, transactionType, description);
+                await this._logTransaction(userId, guildId, transactionType, amount, currentBalance, newBalance, reason);
             }
 
-            this.log(`Updated ${type} balance for user ${userId} by ${amount}`, 'info');
             return true;
         } catch (error) {
             this.log(`Error updating balance for user ${userId}: ${error.message}`, 'error');
@@ -117,10 +103,9 @@ class EconomyModel extends Model {
 
     /**
      * Claim daily reward
-     * Uses atomic UPDATE with cooldown check to prevent concurrent double-claims.
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @returns {Promise<Object>} Result with success status and details
+     * @param {string} userId
+     * @param {string} guildId
+     * @returns {Promise<Object>}
      */
     async claimDaily(userId, guildId) {
         try {
@@ -129,45 +114,48 @@ class EconomyModel extends Model {
             const now = Math.floor(Date.now() / 1000);
             const oneDaySeconds = 24 * 60 * 60;
 
-            // Read current state
-            const account = await this.findOneBy({ guild_id: guildId, user_id: userId });
-            const lastDaily = account.last_daily_at || 0;
-            const timeSinceLastDaily = now - lastDaily;
+            const account = (await this.query(
+                `SELECT balance, last_daily FROM economy_accounts WHERE user_id = ? AND guild_id = ?`,
+                [userId, guildId]
+            ))?.[0];
 
-            if (timeSinceLastDaily < oneDaySeconds) {
-                return { success: false, timeLeft: oneDaySeconds - timeSinceLastDaily };
+            const lastDaily = account?.last_daily || 0;
+            const timeSince = now - lastDaily;
+
+            if (timeSince < oneDaySeconds) {
+                return { success: false, timeLeft: (oneDaySeconds - timeSince) * 1000 };
             }
 
-            const streak = account.daily_streak || 0;
-            const newStreak = timeSinceLastDaily < 2 * oneDaySeconds ? streak + 1 : 1;
-            const baseReward = 500;
-            const streakBonus = Math.min(newStreak * 50, 500);
-            const totalReward = baseReward + streakBonus;
+            const reward = 500;
+            const currentBal = account?.balance || 0;
+            const newBal = currentBal + reward;
 
-            // Atomic UPDATE — only succeeds if last_daily_at hasn't changed since we read it
-            // (guards against concurrent claims)
-            const result = await this.query(
-                `UPDATE ${this.tableName}
-                 SET wallet_balance = wallet_balance + ?,
-                     total_earned   = total_earned + ?,
-                     last_daily_at  = ?,
-                     daily_streak   = ?,
-                     updated_at     = ?
-                 WHERE guild_id = ? AND user_id = ?
-                   AND (last_daily_at IS NULL OR last_daily_at = ?)`,
-                [totalReward, totalReward, now, newStreak, now, guildId, userId, lastDaily]
+            const updateRes = await this.query(
+                `UPDATE economy_accounts
+                 SET balance = balance + ?,
+                     last_daily = ?,
+                     updated_at = ?
+                 WHERE user_id = ? AND guild_id = ?
+                   AND (last_daily IS NULL OR last_daily = ?)`,
+                [reward, now, now, userId, guildId, lastDaily]
             );
 
-            if (!result || result.rowsAffected === 0) {
-                // Another concurrent request already claimed — re-read and return timeLeft
-                const fresh = await this.findOneBy({ guild_id: guildId, user_id: userId });
-                return { success: false, timeLeft: oneDaySeconds - (now - (fresh.last_daily_at || 0)) };
+            if (!updateRes || updateRes.changes === 0) {
+                const fresh = (await this.query(
+                    `SELECT last_daily FROM economy_accounts WHERE user_id = ? AND guild_id = ?`,
+                    [userId, guildId]
+                ))?.[0];
+                return { success: false, timeLeft: (oneDaySeconds - (now - (fresh?.last_daily || 0))) * 1000 };
             }
 
-            await this._logTransaction(guildId, null, userId, totalReward, 'daily', `Daily reward (streak: ${newStreak})`);
+            await this._logTransaction(userId, guildId, 'daily', reward, currentBal, newBal, 'Daily reward');
 
-            const newBalance = await this.getUserBalance(userId, guildId);
-            return { success: true, amount: totalReward, streak: newStreak, newBalance: newBalance.balance };
+            return {
+                success: true,
+                amount: reward,
+                streak: 1,
+                newBalance: newBal,
+            };
         } catch (error) {
             this.log(`Error claiming daily for user ${userId}: ${error.message}`, 'error');
             throw error;
@@ -176,10 +164,9 @@ class EconomyModel extends Model {
 
     /**
      * Work to earn money
-     * Uses atomic UPDATE with cooldown check to prevent concurrent double-work.
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @returns {Promise<Object>} Result with success status and details
+     * @param {string} userId
+     * @param {string} guildId
+     * @returns {Promise<Object>}
      */
     async work(userId, guildId) {
         try {
@@ -188,45 +175,54 @@ class EconomyModel extends Model {
             const now = Math.floor(Date.now() / 1000);
             const cooldownSeconds = 60 * 60; // 1 hour
 
-            const account = await this.findOneBy({ guild_id: guildId, user_id: userId });
-            const lastWork = account.last_work_at || 0;
-            const timeSinceLastWork = now - lastWork;
+            const cdRows = await this.query(
+                `SELECT expires_at FROM economy_cooldowns WHERE user_id = ? AND guild_id = ? AND action = 'work'`,
+                [userId, guildId]
+            );
 
-            if (timeSinceLastWork < cooldownSeconds) {
-                return { success: false, timeLeft: cooldownSeconds - timeSinceLastWork };
+            const expiresAt = cdRows?.[0]?.expires_at || 0;
+            if (expiresAt > now) {
+                return { success: false, timeLeft: (expiresAt - now) * 1000 };
             }
 
-            const amount = Math.floor(Math.random() * 200) + 100; // 100-300 coins
+            const amount = Math.floor(Math.random() * 200) + 100;
             const messages = [
                 'You worked as a developer and fixed some bugs!',
                 'You delivered packages around town!',
                 'You helped at a local restaurant!',
-                'You did some freelance work!',
+                'You did some freelance design work!',
                 'You walked dogs in the neighborhood!'
             ];
             const message = messages[Math.floor(Math.random() * messages.length)];
 
-            // Atomic UPDATE — only succeeds if last_work_at hasn't changed since we read it
-            const result = await this.query(
-                `UPDATE ${this.tableName}
-                 SET wallet_balance = wallet_balance + ?,
-                     total_earned   = total_earned + ?,
-                     last_work_at   = ?,
-                     updated_at     = ?
-                 WHERE guild_id = ? AND user_id = ?
-                   AND (last_work_at IS NULL OR last_work_at = ?)`,
-                [amount, amount, now, now, guildId, userId, lastWork]
+            const newExpires = now + cooldownSeconds;
+            await this.query(
+                `INSERT INTO economy_cooldowns (user_id, guild_id, action, expires_at)
+                 VALUES (?, ?, 'work', ?)
+                 ON CONFLICT(user_id, guild_id, action) DO UPDATE SET expires_at = excluded.expires_at`,
+                [userId, guildId, newExpires]
             );
 
-            if (!result || result.rowsAffected === 0) {
-                const fresh = await this.findOneBy({ guild_id: guildId, user_id: userId });
-                return { success: false, timeLeft: cooldownSeconds - (now - (fresh.last_work_at || 0)) };
-            }
+            const account = (await this.query(
+                `SELECT balance FROM economy_accounts WHERE user_id = ? AND guild_id = ?`,
+                [userId, guildId]
+            ))?.[0];
+            const currentBal = account?.balance || 0;
+            const newBal = currentBal + amount;
 
-            await this._logTransaction(guildId, null, userId, amount, 'work', message);
+            await this.query(
+                `UPDATE economy_accounts SET balance = balance + ?, updated_at = ? WHERE user_id = ? AND guild_id = ?`,
+                [amount, now, userId, guildId]
+            );
 
-            const newBalance = await this.getUserBalance(userId, guildId);
-            return { success: true, amount, message, newBalance: newBalance.balance };
+            await this._logTransaction(userId, guildId, 'work', amount, currentBal, newBal, message);
+
+            return {
+                success: true,
+                amount,
+                message,
+                newBalance: newBal,
+            };
         } catch (error) {
             this.log(`Error working for user ${userId}: ${error.message}`, 'error');
             throw error;
@@ -234,72 +230,57 @@ class EconomyModel extends Model {
     }
 
     /**
-     * Transfer money to another user
-     * Balance check is performed inside the transaction to prevent race conditions.
-     * @param {string} fromUserId - Sender user ID
-     * @param {string} toUserId - Receiver user ID
-     * @param {string} guildId - Guild ID
-     * @param {number} amount - Amount to transfer
-     * @returns {Promise<Object>} Result with success status
+     * Transfer money between users
+     * @param {string} fromUserId
+     * @param {string} toUserId
+     * @param {string} guildId
+     * @param {number} amount
+     * @returns {Promise<Object>}
      */
     async transfer(fromUserId, toUserId, guildId, amount) {
         try {
-            // Ensure both accounts exist before entering transaction
             await this._ensureAccount(fromUserId, guildId);
             await this._ensureAccount(toUserId, guildId);
 
             const now = Math.floor(Date.now() / 1000);
-            let newBalance = null;
+            let fromNewBal = 0;
 
-            await this.db.transaction(async (db) => {
-                // Re-read sender balance inside transaction to prevent TOCTOU race
-                const senderRows = await db.query(
-                    `SELECT wallet_balance FROM ${this.tableName} WHERE guild_id = ? AND user_id = ?`,
-                    [guildId, fromUserId]
+            await this.db.transaction(async (tx) => {
+                const senderRows = await tx.query(
+                    `SELECT balance FROM economy_accounts WHERE user_id = ? AND guild_id = ?`,
+                    [fromUserId, guildId]
                 );
-                const senderBalance = senderRows?.[0]?.wallet_balance ?? 0;
+                const senderBal = senderRows?.[0]?.balance ?? 0;
 
-                if (senderBalance < amount) {
-                    // Signal insufficient balance via a thrown object caught below
+                if (senderBal < amount) {
                     const err = new Error('INSUFFICIENT_BALANCE');
                     err.code = 'INSUFFICIENT_BALANCE';
                     throw err;
                 }
 
                 // Deduct from sender
-                await db.query(
-                    `UPDATE ${this.tableName} 
-                     SET wallet_balance = wallet_balance - ?, 
-                         total_spent = total_spent + ?,
-                         updated_at = ? 
-                     WHERE guild_id = ? AND user_id = ?`,
-                    [amount, amount, now, guildId, fromUserId]
+                await tx.query(
+                    `UPDATE economy_accounts SET balance = balance - ?, updated_at = ? WHERE user_id = ? AND guild_id = ?`,
+                    [amount, now, fromUserId, guildId]
                 );
 
                 // Add to receiver
-                await db.query(
-                    `UPDATE ${this.tableName} 
-                     SET wallet_balance = wallet_balance + ?, 
-                         total_earned = total_earned + ?,
-                         updated_at = ? 
-                     WHERE guild_id = ? AND user_id = ?`,
-                    [amount, amount, now, guildId, toUserId]
+                await tx.query(
+                    `UPDATE economy_accounts SET balance = balance + ?, updated_at = ? WHERE user_id = ? AND guild_id = ?`,
+                    [amount, now, toUserId, guildId]
                 );
 
-                // Capture new balance while still in transaction
-                const updatedRows = await db.query(
-                    `SELECT wallet_balance FROM ${this.tableName} WHERE guild_id = ? AND user_id = ?`,
-                    [guildId, fromUserId]
-                );
-                newBalance = updatedRows?.[0]?.wallet_balance ?? 0;
+                fromNewBal = senderBal - amount;
 
-                // Log transaction
-                await this._logTransaction(guildId, fromUserId, toUserId, amount, 'transfer', `Transfer from ${fromUserId} to ${toUserId}`);
+                // Log transactions
+                await tx.query(
+                    `INSERT INTO economy_transactions (user_id, guild_id, type, amount, balance_before, balance_after, reason, created_at)
+                     VALUES (?, ?, 'transfer_out', ?, ?, ?, ?, ?)`,
+                    [fromUserId, guildId, -amount, senderBal, fromNewBal, `Transfer to ${toUserId}`, now]
+                );
             });
 
-            this.log(`Transferred ${amount} from ${fromUserId} to ${toUserId}`, 'info');
-
-            return { success: true, newBalance };
+            return { success: true, newBalance: fromNewBal };
         } catch (error) {
             if (error.code === 'INSUFFICIENT_BALANCE') {
                 return { success: false, message: 'Insufficient balance' };
@@ -310,31 +291,28 @@ class EconomyModel extends Model {
     }
 
     /**
-     * Deposit money to bank
-     * Balance check is performed atomically inside a single UPDATE to prevent race conditions.
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {number} amount - Amount to deposit
-     * @returns {Promise<Object>} Result with success status
+     * Deposit wallet coins to bank
+     * @param {string} userId
+     * @param {string} guildId
+     * @param {number} amount
+     * @returns {Promise<Object>}
      */
     async deposit(userId, guildId, amount) {
         try {
             await this._ensureAccount(userId, guildId);
-
             const now = Math.floor(Date.now() / 1000);
 
-            // Atomic: only update if wallet has sufficient funds
             const result = await this.query(
-                `UPDATE ${this.tableName} 
-                 SET wallet_balance = wallet_balance - ?, 
+                `UPDATE economy_accounts
+                 SET balance = balance - ?,
                      bank_balance = bank_balance + ?,
-                     updated_at = ? 
-                 WHERE guild_id = ? AND user_id = ? AND wallet_balance >= ?`,
-                [amount, amount, now, guildId, userId, amount]
+                     updated_at = ?
+                 WHERE user_id = ? AND guild_id = ? AND balance >= ?`,
+                [amount, amount, now, userId, guildId, amount]
             );
 
-            if (!result || result.rowsAffected === 0) {
-                return { success: false, message: 'Insufficient balance in wallet' };
+            if (!result || result.changes === 0) {
+                return { success: false, message: 'Insufficient wallet balance' };
             }
 
             return { success: true };
@@ -345,31 +323,28 @@ class EconomyModel extends Model {
     }
 
     /**
-     * Withdraw money from bank
-     * Balance check is performed atomically inside a single UPDATE to prevent race conditions.
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {number} amount - Amount to withdraw
-     * @returns {Promise<Object>} Result with success status
+     * Withdraw bank coins to wallet
+     * @param {string} userId
+     * @param {string} guildId
+     * @param {number} amount
+     * @returns {Promise<Object>}
      */
     async withdraw(userId, guildId, amount) {
         try {
             await this._ensureAccount(userId, guildId);
-
             const now = Math.floor(Date.now() / 1000);
 
-            // Atomic: only update if bank has sufficient funds
             const result = await this.query(
-                `UPDATE ${this.tableName} 
-                 SET wallet_balance = wallet_balance + ?, 
+                `UPDATE economy_accounts
+                 SET balance = balance + ?,
                      bank_balance = bank_balance - ?,
-                     updated_at = ? 
-                 WHERE guild_id = ? AND user_id = ? AND bank_balance >= ?`,
-                [amount, amount, now, guildId, userId, amount]
+                     updated_at = ?
+                 WHERE user_id = ? AND guild_id = ? AND bank_balance >= ?`,
+                [amount, amount, now, userId, guildId, amount]
             );
 
-            if (!result || result.rowsAffected === 0) {
-                return { success: false, message: 'Insufficient balance in bank' };
+            if (!result || result.changes === 0) {
+                return { success: false, message: 'Insufficient bank balance' };
             }
 
             return { success: true };
@@ -381,42 +356,32 @@ class EconomyModel extends Model {
 
     /**
      * Get economy leaderboard
-     * @param {string} guildId - Guild ID
-     * @param {string} type - Leaderboard type ('wallet', 'bank', 'total')
-     * @param {number} limit - Number of users to return
-     * @returns {Promise<Array>} Leaderboard data
+     * @param {string} guildId
+     * @param {string} type
+     * @param {number} limit
+     * @returns {Promise<Array>}
      */
     async getLeaderboard(guildId, type = 'wallet', limit = 10) {
         try {
-            let orderBy = 'wallet_balance DESC';
-            switch (type) {
-                case 'bank':
-                    orderBy = 'bank_balance DESC';
-                    break;
-                case 'total':
-                    orderBy = '(wallet_balance + bank_balance) DESC';
-                    break;
-                default:
-                    orderBy = 'wallet_balance DESC';
-            }
+            let orderBy = 'balance DESC';
+            if (type === 'bank') orderBy = 'bank_balance DESC';
+            if (type === 'total') orderBy = '(balance + bank_balance) DESC';
 
-            const results = await this.query(
-                `SELECT user_id, wallet_balance, bank_balance, total_earned, total_spent 
-                 FROM ${this.tableName} 
-                 WHERE guild_id = ? 
-                 ORDER BY ${orderBy} 
+            const rows = await this.query(
+                `SELECT user_id, balance, bank_balance
+                 FROM economy_accounts
+                 WHERE guild_id = ?
+                 ORDER BY ${orderBy}
                  LIMIT ?`,
                 [guildId, limit]
             );
 
-            return results.map((row, index) => ({
+            return rows.map((row, index) => ({
                 rank: index + 1,
                 userId: row.user_id,
-                walletBalance: row.wallet_balance,
+                walletBalance: row.balance,
                 bankBalance: row.bank_balance,
-                totalBalance: row.wallet_balance + row.bank_balance,
-                totalEarned: row.total_earned,
-                totalSpent: row.total_spent
+                totalBalance: row.balance + row.bank_balance,
             }));
         } catch (error) {
             this.log(`Error getting leaderboard: ${error.message}`, 'error');
@@ -426,10 +391,10 @@ class EconomyModel extends Model {
 
     /**
      * Get transaction history
-     * @param {string} guildId - Guild ID
-     * @param {string} userId - User ID (optional)
-     * @param {number} limit - Number of transactions to return
-     * @returns {Promise<Array>} Transaction history
+     * @param {string} guildId
+     * @param {string} userId
+     * @param {number} limit
+     * @returns {Promise<Array>}
      */
     async getTransactionHistory(guildId, userId = null, limit = 50) {
         try {
@@ -437,15 +402,15 @@ class EconomyModel extends Model {
             const params = [guildId];
 
             if (userId) {
-                sql += ` AND (from_user_id = ? OR to_user_id = ?)`;
-                params.push(userId, userId);
+                sql += ` AND user_id = ?`;
+                params.push(userId);
             }
 
             sql += ` ORDER BY created_at DESC LIMIT ?`;
             params.push(limit);
 
-            const results = await this.query(sql, params);
-            return results || [];
+            const rows = await this.query(sql, params);
+            return rows || [];
         } catch (error) {
             this.log(`Error getting transaction history: ${error.message}`, 'error');
             throw error;
@@ -453,82 +418,44 @@ class EconomyModel extends Model {
     }
 
     /**
-     * Ensure economy account exists for user.
-     * Uses INSERT ... ON CONFLICT DO NOTHING to prevent TOCTOU race conditions.
+     * Ensure user and economy account exist
      * @private
      */
     async _ensureAccount(userId, guildId) {
-        try {
-            // Get starting balance from guild settings
-            let startingBalance = 1000;
-            try {
-                if (this.instance.client && this.instance.client.modules) {
-                    const adminModule = this.instance.client.modules.get('admin');
-                    if (adminModule) {
-                        const guildConfigService = adminModule.getService('GuildConfigService');
-                        if (guildConfigService) {
-                            const configuredBalance = await guildConfigService.getSetting(guildId, 'economy_starting_balance');
-                            if (configuredBalance !== undefined && configuredBalance !== null) {
-                                startingBalance = configuredBalance;
-                            }
-                        }
-                    }
-                }
-            } catch (error) {
-                this.log(`Error getting starting balance from config: ${error.message}`, 'warn');
-            }
+        const now = Math.floor(Date.now() / 1000);
+        const startingBalance = 1000;
 
-            const now = Math.floor(Date.now() / 1000);
-            const accountId = `${guildId}-${userId}`;
+        // Ensure user profile exists for FK
+        await this.query(
+            `INSERT INTO user_profiles (user_id, created_at, updated_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(user_id) DO NOTHING`,
+            [userId, now, now]
+        );
 
-            // Ensure user profile exists (FK requirement)
-            await this.query(
-                `INSERT INTO user_profiles (user_id, username, discriminator, avatar_url, bot, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(user_id) DO NOTHING`,
-                [userId, String(userId), null, null, 0, now, now]
-            );
-
-            // Atomic upsert — safe against concurrent calls
-            await this.query(
-                `INSERT INTO ${this.tableName}
-                 (id, guild_id, user_id, wallet_balance, bank_balance, total_earned, total_spent,
-                  daily_streak, last_daily_at, last_work_at, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, 0, ?, 0, 0, NULL, NULL, ?, ?)
-                 ON CONFLICT(id) DO NOTHING`,
-                [accountId, guildId, userId, startingBalance, startingBalance, now, now]
-            );
-        } catch (error) {
-            this.log(`Error ensuring account: ${error.message}`, 'error');
-            throw error;
-        }
+        // Ensure economy account exists
+        await this.query(
+            `INSERT INTO economy_accounts (user_id, guild_id, balance, bank_balance, created_at, updated_at)
+             VALUES (?, ?, ?, 0, ?, ?)
+             ON CONFLICT(user_id, guild_id) DO NOTHING`,
+            [userId, guildId, startingBalance, now, now]
+        );
     }
 
     /**
-     * Log a transaction
+     * Log transaction
      * @private
-     * @param {string} guildId - Guild ID
-     * @param {string} fromUserId - From user ID (null for system)
-     * @param {string} toUserId - To user ID (null for system)
-     * @param {number} amount - Transaction amount
-     * @param {string} type - Transaction type
-     * @param {string} description - Transaction description
-     * @returns {Promise<void>}
      */
-    async _logTransaction(guildId, fromUserId, toUserId, amount, type, description) {
+    async _logTransaction(userId, guildId, type, amount, before, after, reason = null) {
         try {
-            const transactionId = randomUUID();
             const now = Math.floor(Date.now() / 1000);
-
             await this.query(
-                `INSERT INTO economy_transactions 
-                 (id, guild_id, from_user_id, to_user_id, amount, type, description, metadata, created_at) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [transactionId, guildId, fromUserId, toUserId, amount, type, description, '{}', now]
+                `INSERT INTO economy_transactions (user_id, guild_id, type, amount, balance_before, balance_after, reason, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                [userId, guildId, type, amount, before, after, reason, now]
             );
-        } catch (error) {
-            this.log(`Error logging transaction: ${error.message}`, 'warn');
-            // Don't throw - transaction logging is not critical
+        } catch (err) {
+            this.log(`Failed to log transaction: ${err.message}`, 'warn');
         }
     }
 }

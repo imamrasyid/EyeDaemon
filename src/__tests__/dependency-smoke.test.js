@@ -16,7 +16,7 @@ describe('dependency smoke checks', () => {
     });
 
     test('loads local modules without starting long-running processes', () => {
-        expect(typeof require('../server/app')).toBe('function');
+        expect(typeof require('../bot/system/server/HttpServer')).toBe('function');
         expect(typeof require('../bot/bootstrap')).toBe('function');
         expect(require('../bot/migrations/0001_initial_schema').name).toBe('0001_initial_schema');
     });

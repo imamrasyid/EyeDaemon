@@ -6,6 +6,7 @@
 
 const BaseInteraction = require('../../../../../system/core/BaseInteraction');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const ResponseHelper = require('../../../../../system/helpers/ResponseHelper');
 
 class HelpModerationButton extends BaseInteraction {
     constructor(client) {
@@ -29,11 +30,11 @@ class HelpModerationButton extends BaseInteraction {
             const commandFields = this.formatCommands(commands);
 
             const embed = new EmbedBuilder()
-                .setColor(0xe74c3c)
-                .setTitle('🛡️ Moderation Commands')
-                .setDescription('Manage your server and moderate members')
+                .setColor(ResponseHelper.THEMES.MODERATION)
+                .setTitle('🛡️ Server Moderation Commands')
+                .setDescription('Enforce rules, manage warnings, kick/ban violators, and purge messages')
                 .addFields(commandFields)
-                .setFooter({ text: 'Click a category button to view other commands' })
+                .setFooter({ text: 'EyeDaemon Security System • Click Back to view other categories' })
                 .setTimestamp();
 
             // Create back button

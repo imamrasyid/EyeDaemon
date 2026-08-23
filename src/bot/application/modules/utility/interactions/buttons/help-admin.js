@@ -6,6 +6,7 @@
 
 const BaseInteraction = require('../../../../../system/core/BaseInteraction');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const ResponseHelper = require('../../../../../system/helpers/ResponseHelper');
 
 class HelpAdminButton extends BaseInteraction {
     constructor(client) {
@@ -29,11 +30,11 @@ class HelpAdminButton extends BaseInteraction {
             const commandFields = this.formatCommands(commands);
 
             const embed = new EmbedBuilder()
-                .setColor(0xe67e22)
-                .setTitle('⚙️ Admin Commands')
-                .setDescription('Server configuration and administrative tools\n\n⚠️ **Administrator permission required**')
+                .setColor(ResponseHelper.THEMES.ADMIN)
+                .setTitle('⚙️ Administration Commands')
+                .setDescription('Manage server configuration, inspect health, and view live performance\n\n⚠️ **Administrator permission required**')
                 .addFields(commandFields)
-                .setFooter({ text: 'Click a category button to view other commands' })
+                .setFooter({ text: 'EyeDaemon Admin System • Click Back to view other categories' })
                 .setTimestamp();
 
             // Create back button

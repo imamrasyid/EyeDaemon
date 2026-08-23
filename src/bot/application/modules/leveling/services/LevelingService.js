@@ -389,17 +389,19 @@ class LevelingService extends BaseService {
                 return;
             }
 
-            const embed = new EmbedBuilder()
-                .setColor(0x9b59b6)
-                .setTitle('🎉 Level Up!')
-                .setDescription(`Congratulations ${user}! You've reached **Level ${levelData.newLevel}**!`)
-                .addFields(
-                    { name: 'Previous Level', value: `${levelData.oldLevel}`, inline: true },
-                    { name: 'New Level', value: `${levelData.newLevel}`, inline: true },
-                    { name: 'Total XP', value: `${levelData.newXP}`, inline: true }
-                )
-                .setThumbnail(user.displayAvatarURL())
-                .setTimestamp();
+            const ResponseHelper = require('../../../../system/helpers/ResponseHelper');
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.LEVELING,
+                title: '⚡ Level Up!',
+                thumbnail: user.displayAvatarURL?.() || undefined,
+                description: [
+                    `Congratulations ${user}! You've reached **Level ${levelData.newLevel}**! 🎉`,
+                    '',
+                    `**Previous Level:** \`${levelData.oldLevel}\` ➜ **New Level:** \`${levelData.newLevel}\``,
+                    `**Total Experience:** \`${ResponseHelper.formatNumber(levelData.newXP)} XP\``,
+                ].join('\n'),
+                footerText: 'Keep chatting to earn more XP and climb the leaderboard!'
+            });
 
             await announcementChannel.send({ embeds: [embed] });
 

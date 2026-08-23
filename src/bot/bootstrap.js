@@ -1,8 +1,11 @@
+'use strict';
+
 /**
  * Bootstrap Entry Point
  * 
  * Main entry point for the bot using CodeIgniter-inspired architecture.
- * Initializes Discord client, loads core libraries, and manages the bot lifecycle.
+ * Initializes Discord client, loads core libraries, manages the embedded HTTP server,
+ * and handles the unified bot lifecycle.
  */
 
 const { Client, IntentsBitField } = require('discord.js');
@@ -15,6 +18,7 @@ const CoreLibrariesInitializer = require('./system/initialization/CoreLibrariesI
 const ModuleLoader = require('./system/initialization/ModuleLoader');
 const EventLoader = require('./system/initialization/EventLoader');
 const InteractionLoader = require('./system/initialization/InteractionLoader');
+const HttpServer = require('./system/server/HttpServer');
 const config = require('./application/config/config');
 const logger = require('./system/helpers/LoggerHelper');
 const { rateLimitTracker } = require('./system/helpers/RateLimitHelper');
@@ -79,6 +83,9 @@ class Bot {
         // Initialize CleanupManager
         this.cleanupManager = new CleanupManager(this.client);
 
+        // Embedded HTTP Server reference
+        this.httpServer = null;
+
         // Attach managers to client for event access
         this.client.interactionManager = this.interactionManager;
         this.client.cleanupManager = this.cleanupManager;
@@ -104,13 +111,23 @@ class Bot {
      */
     async init() {
         try {
-            logger.info('Initializing bot...');
+            logger.info('Initializing unified EyeDaemon...');
 
             // Validate configuration
             this.validateConfig();
 
-            // Load core libraries first (including database)
+            // Load core libraries first (including database, audio player, stream service)
             await this.loadCoreLibraries();
+
+            // Start embedded HTTP server if enabled
+            if (config.server.enabled) {
+                this.httpServer = new HttpServer(this.client, {
+                    port: config.server.port,
+                    audioStreamService: this.client.audioStreamService || this.audioPlayer?.audioStreamService,
+                });
+                await this.httpServer.start();
+                this.client.httpServer = this.httpServer;
+            }
 
             // Load modules and controllers
             await this.loadModules();
@@ -128,7 +145,7 @@ class Bot {
             logger.info('Logging in to Discord...');
             await this.client.login(config.token);
 
-            logger.info('Bot initialized successfully');
+            logger.info('EyeDaemon initialized and running successfully');
         } catch (error) {
             logger.error('Failed to initialize bot', {
                 error: error.message,
@@ -183,7 +200,13 @@ class Bot {
      */
     async shutdown() {
         try {
-            logger.info('Shutting down bot...');
+            logger.info('Shutting down EyeDaemon...');
+
+            // Stop embedded HTTP server
+            if (this.httpServer) {
+                await this.httpServer.stop();
+                logger.info('HTTP server stopped');
+            }
 
             // Shutdown services via service container
             if (this.serviceContainer) {
@@ -263,7 +286,7 @@ class Bot {
             // Destroy Discord client
             this.client.destroy();
 
-            logger.info('Bot shutdown complete');
+            logger.info('EyeDaemon shutdown complete');
         } catch (error) {
             logger.error('Error during shutdown', {
                 error: error.message,
@@ -276,7 +299,6 @@ class Bot {
      * Setup rate limit handling for Discord client
      */
     setupRateLimitHandling() {
-        // Handle rate limit events from Discord.js v13
         this.client.on('rateLimit', (rateLimitInfo) => {
             logger.warn('Discord API rate limit hit', {
                 timeout: rateLimitInfo.timeout,
@@ -287,7 +309,6 @@ class Bot {
                 global: rateLimitInfo.global,
             });
 
-            // Track rate limit
             if (rateLimitInfo.route) {
                 rateLimitTracker.setRateLimit(rateLimitInfo.route, rateLimitInfo.timeout);
             }
@@ -300,20 +321,17 @@ class Bot {
      * Setup global error handlers
      */
     setupErrorHandlers() {
-        // Handle uncaught exceptions
         process.on('uncaughtException', (error) => {
             logger.error('Uncaught Exception', {
                 error: error.message,
                 stack: error.stack,
             });
 
-            // Attempt graceful shutdown
             this.shutdown().finally(() => {
                 process.exit(1);
             });
         });
 
-        // Handle unhandled promise rejections
         process.on('unhandledRejection', (reason) => {
             logger.error('Unhandled Rejection', {
                 reason: reason?.message || reason,
@@ -321,7 +339,6 @@ class Bot {
             });
         });
 
-        // Handle graceful shutdown signals
         process.on('SIGINT', () => {
             logger.info('Received SIGINT, shutting down gracefully');
             this.shutdown().finally(() => {

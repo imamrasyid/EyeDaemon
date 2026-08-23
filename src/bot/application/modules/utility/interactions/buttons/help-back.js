@@ -1,11 +1,12 @@
 /**
  * Help Back Button Interaction
  * 
- * Returns to the main help menu with category buttons.
+ * Returns to the main help menu with category buttons using ResponseHelper.
  */
 
 const BaseInteraction = require('../../../../../system/core/BaseInteraction');
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const ResponseHelper = require('../../../../../system/helpers/ResponseHelper');
 
 class HelpBackButton extends BaseInteraction {
     constructor(client) {
@@ -17,57 +18,45 @@ class HelpBackButton extends BaseInteraction {
 
     async execute(interaction) {
         try {
-            // Create main help embed with category buttons
-            const embed = new EmbedBuilder()
-                .setColor(0x3498db)
-                .setTitle('📚 Help - EyeDaemon Bot')
-                .setDescription('Select a category below to view available commands')
-                .addFields(
-                    { name: '🎵 Music', value: 'Music playback and queue management', inline: true },
-                    { name: '💰 Economy', value: 'Currency system with games and shop', inline: true },
-                    { name: '📊 Leveling', value: 'XP and leveling system with rewards', inline: true },
-                    { name: '🛡️ Moderation', value: 'Moderation tools and commands', inline: true },
-                    { name: '🔧 Utility', value: 'General utility commands', inline: true },
-                    { name: '\u200b', value: '\u200b', inline: true } // Empty field for alignment
-                )
-                .setFooter({ text: `EyeDaemon Bot v${this.client.config?.VERSION || '1.0.0'}` })
-                .setTimestamp();
+            const modules = this.client.modules || new Map();
+            const moduleList = [];
+
+            const categoryMetadata = {
+                music: { emoji: '🎵', name: 'Music', description: 'Audio streaming, equalizer filters & playlist management' },
+                economy: { emoji: '💰', name: 'Economy', description: 'Currency system, Blackjack casino, shop & inventory' },
+                leveling: { emoji: '📊', name: 'Leveling', description: 'XP progression, server rank cards & leaderboards' },
+                moderation: { emoji: '🛡️', name: 'Moderation', description: 'Server security, auto-moderation, kick/ban & purge' },
+                ticket: { emoji: '🎫', name: 'Ticket Support', description: 'Multi-category ticket channels & staff management' },
+                admin: { emoji: '⚙️', name: 'Administration', description: 'Server configuration & system performance monitoring' },
+                utility: { emoji: '🔧', name: 'Utility', description: 'General server statistics, bot info & help guides' },
+            };
+
+            for (const [modKey, mod] of modules) {
+                const count = (mod.commands || []).length;
+                const meta = categoryMetadata[modKey] || { emoji: '🔹', name: modKey, description: 'Module features' };
+                moduleList.push({
+                    emoji: meta.emoji,
+                    name: meta.name,
+                    description: meta.description,
+                    commandsCount: count,
+                });
+            }
+
+            const embed = ResponseHelper.helpMainCard(moduleList);
 
             // Create category buttons
-            const row1 = new ActionRowBuilder()
-                .addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('help_music')
-                        .setLabel('Music')
-                        .setEmoji('🎵')
-                        .setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder()
-                        .setCustomId('help_economy')
-                        .setLabel('Economy')
-                        .setEmoji('💰')
-                        .setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder()
-                        .setCustomId('help_leveling')
-                        .setLabel('Leveling')
-                        .setEmoji('📊')
-                        .setStyle(ButtonStyle.Primary)
-                );
+            const row1 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('help_music').setLabel('Music').setEmoji('🎵').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('help_economy').setLabel('Economy').setEmoji('💰').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('help_leveling').setLabel('Leveling').setEmoji('📊').setStyle(ButtonStyle.Primary)
+            );
 
-            const row2 = new ActionRowBuilder()
-                .addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('help_moderation')
-                        .setLabel('Moderation')
-                        .setEmoji('🛡️')
-                        .setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder()
-                        .setCustomId('help_utility')
-                        .setLabel('Utility')
-                        .setEmoji('🔧')
-                        .setStyle(ButtonStyle.Primary)
-                );
+            const row2 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('help_moderation').setLabel('Moderation').setEmoji('🛡️').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('help_utility').setLabel('Utility').setEmoji('🔧').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('help_admin').setLabel('Admin').setEmoji('⚙️').setStyle(ButtonStyle.Primary)
+            );
 
-            // Acknowledge immediately to clear loading, then edit with new state
             await interaction.deferUpdate();
             await interaction.editReply({ embeds: [embed], components: [row1, row2] });
 

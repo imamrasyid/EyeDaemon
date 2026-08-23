@@ -6,6 +6,7 @@
 
 const BaseInteraction = require('../../../../../system/core/BaseInteraction');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const ResponseHelper = require('../../../../../system/helpers/ResponseHelper');
 
 class HelpUtilityButton extends BaseInteraction {
     constructor(client) {
@@ -29,11 +30,11 @@ class HelpUtilityButton extends BaseInteraction {
             const commandFields = this.formatCommands(commands);
 
             const embed = new EmbedBuilder()
-                .setColor(0x95a5a6)
-                .setTitle('🔧 Utility Commands')
-                .setDescription('General utility and server management commands')
+                .setColor(ResponseHelper.THEMES.INFO)
+                .setTitle('🔧 Utility & Server Commands')
+                .setDescription('View server statistics, bot diagnostics, and general help guides')
                 .addFields(commandFields)
-                .setFooter({ text: 'Click a category button to view other commands' })
+                .setFooter({ text: 'EyeDaemon Utility System • Click Back to view other categories' })
                 .setTimestamp();
 
             // Create back button

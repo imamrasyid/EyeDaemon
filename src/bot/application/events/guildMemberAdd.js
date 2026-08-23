@@ -257,17 +257,17 @@ class GuildMemberAddEvent extends BaseEvent {
             }
 
             // Create log embed
-            const { EmbedBuilder } = require('discord.js');
-            const embed = new EmbedBuilder()
-                .setColor('#00ff00')
-                .setTitle('Auto-Role Assigned')
-                .setDescription(`Auto-role assigned to new member`)
-                .addFields(
+            const ResponseHelper = require('../../system/helpers/ResponseHelper');
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.SUCCESS,
+                title: '🛡️ Auto-Role Assigned',
+                description: `Auto-role granted to newly joined member`,
+                fields: [
                     { name: 'Member', value: `${member.user.tag} (${member.user.id})`, inline: true },
-                    { name: 'Role', value: `${role.name} (${role.id})`, inline: true }
-                )
-                .setTimestamp()
-                .setFooter({ text: `Member ID: ${member.user.id}` });
+                    { name: 'Role Assigned', value: `\`${role.name}\` (<@&${role.id}>)`, inline: true }
+                ],
+                footerText: `Member ID: ${member.user.id}`
+            });
 
             await modLogChannel.send({ embeds: [embed] });
         } catch (error) {

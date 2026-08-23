@@ -2,11 +2,12 @@
  * Controller Base Class
  * 
  * Base class for all controllers in the application.
- * Provides loader instance and config access.
+ * Provides loader instance, config access, and centralized ResponseHelper.
  * Inspired by CodeIgniter's Controller pattern.
  */
 
 const Loader = require('./Loader');
+const ResponseHelper = require('../helpers/ResponseHelper');
 
 class Controller {
     /**
@@ -18,6 +19,9 @@ class Controller {
 
         // Initialize loader for dynamic loading of models, libraries, and helpers
         this.load = new Loader(this);
+
+        // Centralized response & templating engine
+        this.response = ResponseHelper;
 
         // Load application config
         try {
@@ -87,40 +91,30 @@ class Controller {
     }
 
     /**
-     * Send error response to interaction
+     * Send error response to interaction using standardized visual embed
      * @param {Object} interaction - Discord interaction
      * @param {string} message - Error message
      * @param {boolean} ephemeral - Whether message should be ephemeral
      */
-    async sendError(interaction, message, ephemeral = false) {
-        const errorMessage = `❌ ${message}`;
-
+    async sendError(interaction, message, ephemeral = true) {
         try {
-            if (interaction.deferred || interaction.replied) {
-                await interaction.editReply({ content: errorMessage, ephemeral });
-            } else {
-                await interaction.reply({ content: errorMessage, ephemeral });
-            }
+            const embed = ResponseHelper.error('Error Occurred', message);
+            await ResponseHelper.send(interaction, embed, { ephemeral });
         } catch (error) {
             this.log(`Failed to send error message: ${error.message}`, 'error');
         }
     }
 
     /**
-     * Send success response to interaction
+     * Send success response to interaction using standardized visual embed
      * @param {Object} interaction - Discord interaction
      * @param {string} message - Success message
      * @param {boolean} ephemeral - Whether message should be ephemeral
      */
     async sendSuccess(interaction, message, ephemeral = false) {
-        const successMessage = `✅ ${message}`;
-
         try {
-            if (interaction.deferred || interaction.replied) {
-                await interaction.editReply({ content: successMessage, ephemeral });
-            } else {
-                await interaction.reply({ content: successMessage, ephemeral });
-            }
+            const embed = ResponseHelper.success('Action Successful', message);
+            await ResponseHelper.send(interaction, embed, { ephemeral });
         } catch (error) {
             this.log(`Failed to send success message: ${error.message}`, 'error');
         }

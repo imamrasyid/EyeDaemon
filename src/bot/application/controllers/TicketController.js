@@ -2,12 +2,12 @@
  * TicketController
  * 
  * Handles all ticket-related commands
- * Manages support tickets, categories, and staff assignment
+ * Manages support tickets, categories, and staff assignment with ResponseHelper UI.
  */
 
 const Controller = require('../../system/core/Controller');
-const { EmbedBuilder, ChannelType, PermissionFlagsBits } = require('discord.js');
-const { deferEphemeral } = require('../../system/helpers/InteractionHelper');
+const { ChannelType, PermissionFlagsBits } = require('discord.js');
+const ResponseHelper = require('../../system/helpers/ResponseHelper');
 
 class TicketController extends Controller {
     /**
@@ -24,21 +24,24 @@ class TicketController extends Controller {
     /**
      * Ticket command handler
      * Creates a new support ticket
-     * @param {Object} interaction - Discord interaction
      */
     async ticket(interaction) {
         try {
-            await deferEphemeral(interaction);
+            await interaction.deferReply({ ephemeral: true });
 
             const category = interaction.options.getString('category') || 'general';
-            const description = interaction.options.getString('description');
+            const description = interaction.options.getString('description') || 'No description provided';
             const guildId = interaction.guild.id;
             const userId = interaction.user.id;
 
             // Check if user already has an open ticket
             const existingTicket = await this.ticketModel.getUserOpenTicket(userId, guildId);
             if (existingTicket) {
-                await interaction.editReply({ content: `❌ You already have an open ticket: <#${existingTicket.channel_id}>` });
+                const embed = ResponseHelper.warning(
+                    'Active Ticket Exists',
+                    `You already have an active open ticket in <#${existingTicket.channel_id}>. Please resolve or close it before opening a new one.`
+                );
+                await ResponseHelper.send(interaction, embed, { ephemeral: true });
                 return;
             }
 
@@ -68,62 +71,66 @@ class TicketController extends Controller {
             // Save ticket to database
             await this.ticketModel.createTicket(guildId, userId, channel.id, category, description, ticketNumber);
 
-            // Send ticket message
-            const embed = new EmbedBuilder()
-                .setColor(0x3498db)
-                .setTitle(`🎫 Ticket #${ticketNumber}`)
-                .setDescription(description || 'No description provided')
-                .addFields(
-                    { name: 'Category', value: category, inline: true },
-                    { name: 'Created By', value: `${interaction.user}`, inline: true },
-                    { name: 'Status', value: 'Open', inline: true }
-                )
-                .setTimestamp();
+            // Send initial ticket message in the newly created channel
+            const ticketWelcomeEmbed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.TICKET,
+                title: `🎫 Support Ticket #${ticketNumber}`,
+                description: [
+                    `Hello ${interaction.user}, welcome to your private support channel!`,
+                    'Staff has been notified and will assist you shortly.',
+                    '',
+                    `**Category:** \`${category.toUpperCase()}\``,
+                    `**Description:** \`\`\`${description}\`\`\``,
+                    '',
+                    ResponseHelper.subtext('Use `/close` when your inquiry has been resolved.')
+                ].join('\n'),
+            });
 
-            await channel.send({ content: `${interaction.user}`, embeds: [embed] });
+            await channel.send({ content: `${interaction.user}`, embeds: [ticketWelcomeEmbed] });
 
-            await interaction.editReply({ content: `✅ Ticket created: ${channel}` });
+            const successEmbed = ResponseHelper.success(
+                'Ticket Created',
+                `Your support ticket has been opened successfully: ${channel}`
+            );
+            await ResponseHelper.send(interaction, successEmbed, { ephemeral: true });
+
             this.log(`Ticket #${ticketNumber} created by ${userId}`, 'info');
         } catch (error) {
             this.log(`Error in ticket command: ${error.message}`, 'error');
-            await this.sendError(interaction, 'Failed to create ticket');
+            await this.sendError(interaction, 'Failed to create ticket channel');
         }
     }
 
     /**
      * Close command handler
      * Closes a ticket
-     * @param {Object} interaction - Discord interaction
      */
     async close(interaction) {
         try {
             const guildId = interaction.guild.id;
             const channelId = interaction.channel.id;
 
-            // Check if this is a ticket channel
             const ticket = await this.ticketModel.getTicketByChannel(channelId, guildId);
             if (!ticket) {
-                await interaction.reply({ content: '❌ This is not a ticket channel' });
+                await this.sendError(interaction, 'This command can only be used inside an active ticket channel.');
                 return;
             }
 
             if (ticket.status === 'closed') {
-                await interaction.reply({ content: '❌ This ticket is already closed' });
+                await this.sendError(interaction, 'This ticket is already closed.');
                 return;
             }
 
-            // Close the ticket
             await this.ticketModel.closeTicket(ticket.id, interaction.user.id);
 
-            const embed = new EmbedBuilder()
-                .setColor(0xe74c3c)
-                .setTitle('🔒 Ticket Closed')
-                .setDescription(`Ticket #${ticket.ticket_number} has been closed by ${interaction.user}`)
-                .setTimestamp();
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.ERROR,
+                title: '🔒 Ticket Closed',
+                description: `Ticket **#${ticket.ticket_number}** has been closed by ${interaction.user}.\n\n*This channel will be deleted in 5 seconds...*`
+            });
 
-            await interaction.reply({ embeds: [embed] });
+            await ResponseHelper.send(interaction, embed);
 
-            // Delete channel after 5 seconds
             setTimeout(async () => {
                 try {
                     await interaction.channel.delete();
@@ -141,40 +148,39 @@ class TicketController extends Controller {
 
     /**
      * Claim command handler
-     * Claims a ticket for a staff member (requires ManageChannels or Administrator)
-     * @param {Object} interaction - Discord interaction
+     * Claims a ticket for a staff member
      */
     async claim(interaction) {
         try {
             const guildId = interaction.guild.id;
             const channelId = interaction.channel.id;
-
-            // Permission check — only staff can claim tickets
             const member = interaction.member;
-            const hasPermission = member.permissions.has('ManageChannels') ||
-                member.permissions.has('Administrator');
 
+            const hasPermission = member.permissions.has('ManageChannels') || member.permissions.has('Administrator');
             if (!hasPermission) {
-                await interaction.reply({ content: '❌ You need the **Manage Channels** permission to claim tickets', ephemeral: true });
+                await this.sendError(interaction, 'You need **Manage Channels** permission to claim tickets.', true);
                 return;
             }
 
-            // Check if this is a ticket channel
             const ticket = await this.ticketModel.getTicketByChannel(channelId, guildId);
             if (!ticket) {
-                await interaction.reply({ content: '❌ This is not a ticket channel' });
+                await this.sendError(interaction, 'This is not an active ticket channel.');
                 return;
             }
 
             if (ticket.claimed_by) {
-                await interaction.reply({ content: `❌ This ticket is already claimed by <@${ticket.claimed_by}>` });
+                await this.sendError(interaction, `This ticket is already claimed by <@${ticket.claimed_by}>.`);
                 return;
             }
 
-            // Claim the ticket
             await this.ticketModel.claimTicket(ticket.id, interaction.user.id);
 
-            await interaction.reply(`✅ ${interaction.user} has claimed this ticket`);
+            const embed = ResponseHelper.success(
+                'Ticket Claimed',
+                `Staff member ${interaction.user} has officially claimed **Ticket #${ticket.ticket_number}** and is handling your inquiry.`
+            );
+
+            await ResponseHelper.send(interaction, embed);
             this.log(`Ticket #${ticket.ticket_number} claimed by ${interaction.user.id}`, 'info');
         } catch (error) {
             this.log(`Error in claim command: ${error.message}`, 'error');
@@ -185,29 +191,31 @@ class TicketController extends Controller {
     /**
      * Unclaim command handler
      * Unclaims a ticket
-     * @param {Object} interaction - Discord interaction
      */
     async unclaim(interaction) {
         try {
             const guildId = interaction.guild.id;
             const channelId = interaction.channel.id;
 
-            // Check if this is a ticket channel
             const ticket = await this.ticketModel.getTicketByChannel(channelId, guildId);
             if (!ticket) {
-                await interaction.reply({ content: '❌ This is not a ticket channel' });
+                await this.sendError(interaction, 'This is not an active ticket channel.');
                 return;
             }
 
             if (!ticket.claimed_by) {
-                await interaction.reply({ content: '❌ This ticket is not claimed' });
+                await this.sendError(interaction, 'This ticket is not currently claimed.');
                 return;
             }
 
-            // Unclaim the ticket
             await this.ticketModel.unclaimTicket(ticket.id);
 
-            await interaction.reply(`✅ Ticket has been unclaimed`);
+            const embed = ResponseHelper.info(
+                'Ticket Unclaimed',
+                `**Ticket #${ticket.ticket_number}** is now open for any staff member to assist.`
+            );
+
+            await ResponseHelper.send(interaction, embed);
             this.log(`Ticket #${ticket.ticket_number} unclaimed`, 'info');
         } catch (error) {
             this.log(`Error in unclaim command: ${error.message}`, 'error');
@@ -218,7 +226,6 @@ class TicketController extends Controller {
     /**
      * Add command handler
      * Adds a user to a ticket
-     * @param {Object} interaction - Discord interaction
      */
     async add(interaction) {
         try {
@@ -226,21 +233,24 @@ class TicketController extends Controller {
             const guildId = interaction.guild.id;
             const channelId = interaction.channel.id;
 
-            // Check if this is a ticket channel
             const ticket = await this.ticketModel.getTicketByChannel(channelId, guildId);
             if (!ticket) {
-                await interaction.reply({ content: '❌ This is not a ticket channel' });
+                await this.sendError(interaction, 'This is not an active ticket channel.');
                 return;
             }
 
-            // Add user to channel
             await interaction.channel.permissionOverwrites.create(user.id, {
                 ViewChannel: true,
                 SendMessages: true,
                 ReadMessageHistory: true,
             });
 
-            await interaction.reply(`✅ Added ${user} to the ticket`);
+            const embed = ResponseHelper.success(
+                'Member Added',
+                `Successfully added ${user} to **Ticket #${ticket.ticket_number}**.`
+            );
+
+            await ResponseHelper.send(interaction, embed);
             this.log(`User ${user.id} added to ticket #${ticket.ticket_number}`, 'info');
         } catch (error) {
             this.log(`Error in add command: ${error.message}`, 'error');
@@ -251,7 +261,6 @@ class TicketController extends Controller {
     /**
      * Remove command handler
      * Removes a user from a ticket
-     * @param {Object} interaction - Discord interaction
      */
     async remove(interaction) {
         try {
@@ -259,17 +268,20 @@ class TicketController extends Controller {
             const guildId = interaction.guild.id;
             const channelId = interaction.channel.id;
 
-            // Check if this is a ticket channel
             const ticket = await this.ticketModel.getTicketByChannel(channelId, guildId);
             if (!ticket) {
-                await interaction.reply({ content: '❌ This is not a ticket channel' });
+                await this.sendError(interaction, 'This is not an active ticket channel.');
                 return;
             }
 
-            // Remove user from channel
             await interaction.channel.permissionOverwrites.delete(user.id);
 
-            await interaction.reply(`✅ Removed ${user} from the ticket`);
+            const embed = ResponseHelper.info(
+                'Member Removed',
+                `Successfully removed ${user} from **Ticket #${ticket.ticket_number}**.`
+            );
+
+            await ResponseHelper.send(interaction, embed);
             this.log(`User ${user.id} removed from ticket #${ticket.ticket_number}`, 'info');
         } catch (error) {
             this.log(`Error in remove command: ${error.message}`, 'error');
@@ -280,29 +292,38 @@ class TicketController extends Controller {
     /**
      * Tickets command handler
      * Lists all tickets
-     * @param {Object} interaction - Discord interaction
      */
     async tickets(interaction) {
         try {
-            await deferEphemeral(interaction);
+            await interaction.deferReply({ ephemeral: true });
 
             const guildId = interaction.guild.id;
             const status = interaction.options.getString('status') || 'open';
 
             const tickets = await this.ticketModel.getTickets(guildId, status);
 
-            if (tickets.length === 0) {
-                await interaction.editReply({ content: `No ${status} tickets found` });
+            if (!tickets || tickets.length === 0) {
+                const embed = ResponseHelper.info(
+                    'Ticket Registry',
+                    `No **${status}** tickets found for this server.`
+                );
+                await ResponseHelper.send(interaction, embed, { ephemeral: true });
                 return;
             }
 
-            const embed = new EmbedBuilder()
-                .setColor(0x3498db)
-                .setTitle(`🎫 ${status.charAt(0).toUpperCase() + status.slice(1)} Tickets`)
-                .setDescription(tickets.map(t => `**#${t.ticket_number}** - <#${t.channel_id}> - <@${t.user_id}>`).join('\n'))
-                .setTimestamp();
+            const ticketLines = tickets.map(t => {
+                const claimText = t.claimed_by ? ` • Claimed: <@${t.claimed_by}>` : '';
+                return `**#${t.ticket_number}** • <#${t.channel_id}> • User: <@${t.user_id}> \`[${t.category || 'general'}]\`${claimText}`;
+            });
 
-            await interaction.editReply({ embeds: [embed] });
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.TICKET,
+                title: `🎫 Server Tickets • ${status.toUpperCase()}`,
+                description: ticketLines.join('\n'),
+                footerText: `Total ${status.toUpperCase()} Tickets: ${tickets.length}`
+            });
+
+            await ResponseHelper.send(interaction, embed, { ephemeral: true });
         } catch (error) {
             this.log(`Error in tickets command: ${error.message}`, 'error');
             await this.sendError(interaction, 'Failed to list tickets');

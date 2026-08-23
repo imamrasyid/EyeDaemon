@@ -1,31 +1,24 @@
+'use strict';
+
 /**
  * EconomyService
  * 
  * Business logic for economy operations including balance management,
  * transfers, deposits, withdrawals, and transaction logging.
+ * Synchronized with consolidated schema.
  */
 
 const BaseService = require('../../../../system/core/BaseService');
 
 class EconomyService extends BaseService {
-    /**
-     * Create a new EconomyService instance
-     * @param {Object} client - Discord client instance
-     * @param {Object} options - Service configuration options
-     */
     constructor(client, options = {}) {
         super(client, options);
         this.economyModel = null;
     }
 
-    /**
-     * Initialize service
-     * @returns {Promise<void>}
-     */
     async initialize() {
         await super.initialize();
 
-        // Load economy model
         const loader = this.client.loader;
         if (loader) {
             this.economyModel = loader.model('EconomyModel');
@@ -36,17 +29,15 @@ class EconomyService extends BaseService {
 
     /**
      * Get user balance
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @returns {Promise<Object>} Balance object with wallet and bank
+     * @param {string} userId
+     * @param {string} guildId
+     * @returns {Promise<Object>}
      */
     async getBalance(userId, guildId) {
         this.validateRequired({ userId, guildId }, ['userId', 'guildId']);
 
         try {
             const balance = await this.economyModel.getUserBalance(userId, guildId);
-
-            this.log(`Retrieved balance for user ${userId}`, 'debug');
 
             return {
                 wallet: balance.balance || 0,
@@ -60,60 +51,48 @@ class EconomyService extends BaseService {
 
     /**
      * Claim daily reward
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @returns {Promise<Object>} Result with success status and details
+     * @param {string} userId
+     * @param {string} guildId
+     * @returns {Promise<Object>}
      */
     async claimDaily(userId, guildId) {
         this.validateRequired({ userId, guildId }, ['userId', 'guildId']);
 
         try {
-            const result = await this.economyModel.claimDaily(userId, guildId);
-
-            this.log(`Daily claim for user ${userId}: ${result.success ? 'success' : 'cooldown'}`, 'info');
-
-            return result;
+            return await this.economyModel.claimDaily(userId, guildId);
         } catch (error) {
             throw this.handleError(error, 'claimDaily', { userId, guildId });
         }
     }
 
     /**
-     * Work to earn money
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @returns {Promise<Object>} Result with success status and details
+     * Work
+     * @param {string} userId
+     * @param {string} guildId
+     * @returns {Promise<Object>}
      */
     async work(userId, guildId) {
         this.validateRequired({ userId, guildId }, ['userId', 'guildId']);
 
         try {
-            const result = await this.economyModel.work(userId, guildId);
-
-            this.log(`Work for user ${userId}: ${result.success ? 'success' : 'cooldown'}`, 'info');
-
-            return result;
+            return await this.economyModel.work(userId, guildId);
         } catch (error) {
             throw this.handleError(error, 'work', { userId, guildId });
         }
     }
 
     /**
-     * Get economy leaderboard
-     * @param {string} guildId - Guild ID
-     * @param {string} type - Leaderboard type ('wallet', 'bank', 'total')
-     * @param {number} limit - Number of users to return
-     * @returns {Promise<Array>} Leaderboard data
+     * Get leaderboard
+     * @param {string} guildId
+     * @param {string} type
+     * @param {number} limit
+     * @returns {Promise<Array>}
      */
     async getLeaderboard(guildId, type = 'wallet', limit = 10) {
         this.validateRequired({ guildId }, ['guildId']);
 
         try {
-            const leaderboard = await this.economyModel.getLeaderboard(guildId, type, limit);
-
-            this.log(`Retrieved leaderboard for guild ${guildId}`, 'debug');
-
-            return leaderboard;
+            return await this.economyModel.getLeaderboard(guildId, type, limit);
         } catch (error) {
             throw this.handleError(error, 'getLeaderboard', { guildId, type, limit });
         }
@@ -121,32 +100,28 @@ class EconomyService extends BaseService {
 
     /**
      * Get transaction history
-     * @param {string} guildId - Guild ID
-     * @param {string} userId - User ID (optional)
-     * @param {number} limit - Number of transactions to return
-     * @returns {Promise<Array>} Transaction history
+     * @param {string} guildId
+     * @param {string} [userId]
+     * @param {number} [limit]
+     * @returns {Promise<Array>}
      */
     async getTransactionHistory(guildId, userId = null, limit = 50) {
         this.validateRequired({ guildId }, ['guildId']);
 
         try {
-            const history = await this.economyModel.getTransactionHistory(guildId, userId, limit);
-
-            this.log(`Retrieved transaction history for guild ${guildId}`, 'debug');
-
-            return history;
+            return await this.economyModel.getTransactionHistory(guildId, userId, limit);
         } catch (error) {
             throw this.handleError(error, 'getTransactionHistory', { guildId, userId, limit });
         }
     }
 
     /**
-     * Add balance to user's wallet
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {number} amount - Amount to add
-     * @param {string} reason - Reason for adding balance
-     * @returns {Promise<Object>} Result with new balance
+     * Add balance
+     * @param {string} userId
+     * @param {string} guildId
+     * @param {number} amount
+     * @param {string} reason
+     * @returns {Promise<Object>}
      */
     async addBalance(userId, guildId, amount, reason = 'Unknown') {
         this.validateRequired({ userId, guildId, amount }, ['userId', 'guildId', 'amount']);
@@ -156,14 +131,8 @@ class EconomyService extends BaseService {
         }
 
         try {
-            await this.economyModel.updateBalance(userId, guildId, amount, 'balance');
-
-            // Log transaction
-            await this.logTransaction(userId, guildId, amount, 'add', reason);
-
+            await this.economyModel.updateBalance(userId, guildId, amount, 'balance', 'add', reason);
             const newBalance = await this.getBalance(userId, guildId);
-
-            this.log(`Added ${amount} to user ${userId}`, 'info', { reason });
 
             return {
                 success: true,
@@ -177,12 +146,12 @@ class EconomyService extends BaseService {
     }
 
     /**
-     * Remove balance from user's wallet
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {number} amount - Amount to remove
-     * @param {string} reason - Reason for removing balance
-     * @returns {Promise<Object>} Result with new balance
+     * Remove balance
+     * @param {string} userId
+     * @param {string} guildId
+     * @param {number} amount
+     * @param {string} reason
+     * @returns {Promise<Object>}
      */
     async removeBalance(userId, guildId, amount, reason = 'Unknown') {
         this.validateRequired({ userId, guildId, amount }, ['userId', 'guildId', 'amount']);
@@ -192,7 +161,6 @@ class EconomyService extends BaseService {
         }
 
         try {
-            // Check if user has sufficient balance
             const currentBalance = await this.getBalance(userId, guildId);
 
             if (currentBalance.wallet < amount) {
@@ -204,14 +172,8 @@ class EconomyService extends BaseService {
                 };
             }
 
-            await this.economyModel.updateBalance(userId, guildId, -amount, 'balance');
-
-            // Log transaction
-            await this.logTransaction(userId, guildId, -amount, 'remove', reason);
-
+            await this.economyModel.updateBalance(userId, guildId, -amount, 'balance', 'remove', reason);
             const newBalance = await this.getBalance(userId, guildId);
-
-            this.log(`Removed ${amount} from user ${userId}`, 'info', { reason });
 
             return {
                 success: true,
@@ -225,12 +187,12 @@ class EconomyService extends BaseService {
     }
 
     /**
-     * Transfer money from one user to another
-     * @param {string} fromUserId - Sender user ID
-     * @param {string} toUserId - Receiver user ID
-     * @param {string} guildId - Guild ID
-     * @param {number} amount - Amount to transfer
-     * @returns {Promise<Object>} Result with success status
+     * Transfer
+     * @param {string} fromUserId
+     * @param {string} toUserId
+     * @param {string} guildId
+     * @param {number} amount
+     * @returns {Promise<Object>}
      */
     async transfer(fromUserId, toUserId, guildId, amount) {
         this.validateRequired(
@@ -238,45 +200,14 @@ class EconomyService extends BaseService {
             ['fromUserId', 'toUserId', 'guildId', 'amount']
         );
 
-        if (amount <= 0) {
-            throw new Error('Amount must be positive');
-        }
-
-        if (fromUserId === toUserId) {
-            return {
-                success: false,
-                message: 'Cannot transfer to yourself'
-            };
-        }
+        if (amount <= 0) throw new Error('Amount must be positive');
+        if (fromUserId === toUserId) return { success: false, message: 'Cannot transfer to yourself' };
 
         try {
-            // Check sender balance
-            const senderBalance = await this.getBalance(fromUserId, guildId);
-
-            if (senderBalance.wallet < amount) {
-                return {
-                    success: false,
-                    message: 'Insufficient balance',
-                    required: amount,
-                    available: senderBalance.wallet
-                };
-            }
-
-            // Perform transfer
             const result = await this.economyModel.transfer(fromUserId, toUserId, guildId, amount);
-
-            if (!result.success) {
-                return result;
-            }
-
-            // Log transactions for both users
-            await this.logTransaction(fromUserId, guildId, -amount, 'transfer_out', `Transfer to user ${toUserId}`);
-            await this.logTransaction(toUserId, guildId, amount, 'transfer_in', `Transfer from user ${fromUserId}`);
+            if (!result.success) return result;
 
             const newBalance = await this.getBalance(fromUserId, guildId);
-
-            this.log(`Transferred ${amount} from ${fromUserId} to ${toUserId}`, 'info');
-
             return {
                 success: true,
                 amount,
@@ -289,33 +220,21 @@ class EconomyService extends BaseService {
     }
 
     /**
-     * Deposit money from wallet to bank
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {number} amount - Amount to deposit
-     * @returns {Promise<Object>} Result with success status
+     * Deposit
+     * @param {string} userId
+     * @param {string} guildId
+     * @param {number} amount
+     * @returns {Promise<Object>}
      */
     async deposit(userId, guildId, amount) {
         this.validateRequired({ userId, guildId, amount }, ['userId', 'guildId', 'amount']);
-
-        if (amount <= 0) {
-            throw new Error('Amount must be positive');
-        }
+        if (amount <= 0) throw new Error('Amount must be positive');
 
         try {
             const result = await this.economyModel.deposit(userId, guildId, amount);
-
-            if (!result.success) {
-                return result;
-            }
-
-            // Log transaction
-            await this.logTransaction(userId, guildId, amount, 'deposit', 'Deposit to bank');
+            if (!result.success) return result;
 
             const newBalance = await this.getBalance(userId, guildId);
-
-            this.log(`User ${userId} deposited ${amount}`, 'info');
-
             return {
                 success: true,
                 amount,
@@ -329,33 +248,21 @@ class EconomyService extends BaseService {
     }
 
     /**
-     * Withdraw money from bank to wallet
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {number} amount - Amount to withdraw
-     * @returns {Promise<Object>} Result with success status
+     * Withdraw
+     * @param {string} userId
+     * @param {string} guildId
+     * @param {number} amount
+     * @returns {Promise<Object>}
      */
     async withdraw(userId, guildId, amount) {
         this.validateRequired({ userId, guildId, amount }, ['userId', 'guildId', 'amount']);
-
-        if (amount <= 0) {
-            throw new Error('Amount must be positive');
-        }
+        if (amount <= 0) throw new Error('Amount must be positive');
 
         try {
             const result = await this.economyModel.withdraw(userId, guildId, amount);
-
-            if (!result.success) {
-                return result;
-            }
-
-            // Log transaction
-            await this.logTransaction(userId, guildId, amount, 'withdraw', 'Withdraw from bank');
+            if (!result.success) return result;
 
             const newBalance = await this.getBalance(userId, guildId);
-
-            this.log(`User ${userId} withdrew ${amount}`, 'info');
-
             return {
                 success: true,
                 amount,
@@ -369,94 +276,14 @@ class EconomyService extends BaseService {
     }
 
     /**
-     * Log a transaction
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {number} amount - Transaction amount (negative for deductions)
-     * @param {string} type - Transaction type
-     * @param {string} description - Transaction description
-     * @returns {Promise<void>}
-     */
-    async logTransaction(userId, guildId, amount, type, description) {
-        try {
-            const db = this.getDatabase();
-            if (!db) {
-                this.log('Database not available for transaction logging', 'warn');
-                return;
-            }
-
-            // Get member ID
-            const memberResult = await this.query(
-                'SELECT id FROM members WHERE user_id = ? AND guild_id = ?',
-                [userId, guildId]
-            );
-
-            if (!memberResult || memberResult.length === 0) {
-                this.log(`Member not found for transaction log: ${userId}`, 'warn');
-                return;
-            }
-
-            const memberId = memberResult[0].id;
-
-            // Insert transaction log
-            await this.query(
-                `INSERT INTO economy_transactions 
-                (member_id, amount, type, description, created_at) 
-                VALUES (?, ?, ?, ?, ?)`,
-                [memberId, amount, type, description, Date.now()]
-            );
-
-            this.log(`Logged transaction for user ${userId}`, 'debug', { type, amount });
-        } catch (error) {
-            // Don't throw error for logging failures, just log it
-            this.log(`Failed to log transaction: ${error.message}`, 'warn', { userId, type, amount });
-        }
-    }
-
-    /**
-     * Get transaction history for a user
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {number} limit - Maximum number of transactions to retrieve
-     * @returns {Promise<Array>} Array of transactions
+     * Get transactions for a user
+     * @param {string} userId
+     * @param {string} guildId
+     * @param {number} limit
+     * @returns {Promise<Array>}
      */
     async getTransactions(userId, guildId, limit = 10) {
-        this.validateRequired({ userId, guildId }, ['userId', 'guildId']);
-
-        try {
-            const db = this.getDatabase();
-            if (!db) {
-                throw new Error('Database not available');
-            }
-
-            // Get member ID
-            const memberResult = await this.query(
-                'SELECT id FROM members WHERE user_id = ? AND guild_id = ?',
-                [userId, guildId]
-            );
-
-            if (!memberResult || memberResult.length === 0) {
-                return [];
-            }
-
-            const memberId = memberResult[0].id;
-
-            // Get transactions
-            const transactions = await this.query(
-                `SELECT amount, type, description, created_at 
-                FROM economy_transactions 
-                WHERE member_id = ? 
-                ORDER BY created_at DESC 
-                LIMIT ?`,
-                [memberId, limit]
-            );
-
-            this.log(`Retrieved ${transactions.length} transactions for user ${userId}`, 'debug');
-
-            return transactions || [];
-        } catch (error) {
-            throw this.handleError(error, 'getTransactions', { userId, guildId, limit });
-        }
+        return this.getTransactionHistory(guildId, userId, limit);
     }
 }
 

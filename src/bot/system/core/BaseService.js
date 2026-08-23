@@ -13,9 +13,9 @@ class BaseService {
      * @param {Object} options - Service configuration options
      */
     constructor(client, options = {}) {
-        this.client = client;
+        this.client = client || null;
         this.options = options;
-        this.logger = client.logger || console;
+        this.logger = client?.logger || console;
         this.serviceName = this.constructor.name;
     }
 

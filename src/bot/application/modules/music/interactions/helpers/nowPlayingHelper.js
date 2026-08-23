@@ -1,11 +1,10 @@
 /**
  * Now Playing Helper
  * 
- * Shared helper functions for updating now playing messages in button interactions
+ * Shared helper functions for updating now playing messages in button interactions with ResponseHelper.
  */
 
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { formatDuration } = require('../../../../../system/helpers/FormatHelper');
+const ResponseHelper = require('../../../../../system/helpers/ResponseHelper');
 
 /**
  * Update now playing message with current state
@@ -17,136 +16,61 @@ async function updateNowPlayingMessage(interaction, playerService) {
     const queue = playerService.getQueue(interaction.guildId);
 
     if (!current) {
-        return await interaction.update({ content: '❌ Nothing is currently playing', components: [] });
+        const payload = { content: '❌ Nothing is currently playing', embeds: [], components: [] };
+        if (interaction.deferred || interaction.replied) {
+            return await interaction.editReply(payload).catch(() => {});
+        } else {
+            return await interaction.update(payload).catch(() => {});
+        }
     }
 
     // Get current position
-    let currentPosition = null;
+    let currentPosition = 0;
     if (playerService.isPlaying(interaction.guildId)) {
-        currentPosition = playerService.getCurrentPosition(interaction.guildId);
+        currentPosition = playerService.getCurrentPosition(interaction.guildId) || 0;
     }
 
-    // Create updated embed
-    const embed = createNowPlayingEmbed(current, queue, currentPosition);
+    // Create updated embed using ResponseHelper
+    const durationSecs = current.duration > 10000 ? Math.floor(current.duration / 1000) : (current.duration || 180);
+    const positionSecs = currentPosition > 10000 ? Math.floor(currentPosition / 1000) : currentPosition;
 
-    // Create updated buttons (returns array of ActionRows)
-    const buttons = createMusicControlButtons(interaction.guildId, playerService, queue);
-
-    await interaction.update({ embeds: [embed], components: buttons });
-}
-
-/**
- * Create now playing embed
- * @param {Object} track - Track object
- * @param {Object} queue - Queue object
- * @param {number} currentPosition - Current position in seconds
- * @returns {EmbedBuilder} Discord embed
- */
-function createNowPlayingEmbed(track, queue, currentPosition) {
-    const embed = new EmbedBuilder()
-        .setColor(0x00b894)
-        .setTitle('🎶 Now Playing')
-        .setDescription(`[${track.title}](${track.url})`);
-
-    // Add duration and position info
-    // track.duration is already in milliseconds (converted by MusicModel)
-    if (currentPosition !== null && currentPosition >= 0) {
-        const currentMs = currentPosition * 1000;
-        const progress = createProgressBar(currentMs, track.duration, 20);
-        embed.addFields({
-            name: 'Progress',
-            value: `${formatDuration(currentMs)} ${progress} ${formatDuration(track.duration)}`,
-            inline: false
-        });
-    } else {
-        embed.addFields({ name: 'Duration', value: formatDuration(track.duration), inline: true });
-    }
-
-    embed.addFields({ name: 'Requested By', value: `<@${track.requestedBy.id}>`, inline: true });
-
-    if (track.thumbnail) {
-        embed.setThumbnail(track.thumbnail);
-    }
-
-    // Add settings
-    const loopEmoji = { 'off': '➡️', 'track': '🔂', 'queue': '🔁' };
-    const filterEmoji = { 'none': '🎵', 'bassboost': '🔊', 'nightcore': '⚡', 'vaporwave': '🌊', '8d': '🎧', 'karaoke': '🎤' };
-    const currentFilter = queue.filter || 'none';
-    const filterName = currentFilter === 'none' ? 'None' : currentFilter.charAt(0).toUpperCase() + currentFilter.slice(1);
-
-    embed.addFields({
-        name: '⚙️ Settings',
-        value: `Loop: ${loopEmoji[queue.loop]} ${queue.loop} | Volume: 🔊 ${queue.volume}% | Filter: ${filterEmoji[currentFilter]} ${filterName}`,
+    const embed = ResponseHelper.nowPlayingCard({
+        track: {
+            title: current.title,
+            author: current.author || current.uploader || 'Unknown Artist',
+            url: current.url,
+            thumbnail: current.thumbnail,
+            duration: durationSecs,
+            requestedBy: current.requestedBy?.id || current.requestedBy,
+        },
+        queue,
+        position: positionSecs,
+        isPaused: playerService.isPaused(interaction.guildId),
+        loopMode: queue?.loop || 'off',
+        volume: playerService.getVolume ? playerService.getVolume(interaction.guildId) : (queue?.volume || 80),
+        filter: queue?.filter || 'none',
     });
 
-    // Add next tracks
-    if (queue.tracks.length > 0) {
-        const nextTracks = queue.tracks.slice(0, 3).map((t, i) => `**${i + 1}.** ${t.title}`).join('\n');
-        embed.addFields({ name: `📋 Up Next (${queue.tracks.length} in queue)`, value: nextTracks });
+    // Create updated buttons using ResponseHelper
+    const buttons = ResponseHelper.musicControlsRow({
+        isPaused: playerService.isPaused(interaction.guildId),
+        loopMode: queue?.loop || 'off',
+    });
+
+    try {
+        if (interaction.deferred || interaction.replied) {
+            await interaction.editReply({ embeds: [embed], components: buttons });
+        } else {
+            await interaction.update({ embeds: [embed], components: buttons });
+        }
+    } catch (err) {
+        // Safely suppress expired token errors
+        if (err.code !== 10062 && !err.message?.includes('Unknown interaction')) {
+            throw err;
+        }
     }
-
-    embed.setTimestamp();
-    return embed;
-}
-
-/**
- * Create progress bar
- * @param {number} current - Current position in milliseconds
- * @param {number} total - Total duration in milliseconds
- * @param {number} length - Length of progress bar
- * @returns {string} Progress bar string
- */
-function createProgressBar(current, total, length = 20) {
-    const progress = Math.min(Math.max(current / total, 0), 1);
-    const filledLength = Math.round(length * progress);
-    const emptyLength = length - filledLength;
-    return '▬'.repeat(filledLength) + '🔘' + '▬'.repeat(emptyLength);
-}
-
-/**
- * Create music control buttons
- * @param {string} guildId - Guild ID
- * @param {Object} playerService - MusicPlayerService instance
- * @param {Object} queue - Queue object
- * @returns {ActionRowBuilder[]} Two action rows with control buttons (max 5 per row)
- */
-function createMusicControlButtons(guildId, playerService, queue) {
-    const isPaused = playerService.isPaused(guildId);
-    const loopMode = queue.loop || 'off';
-
-    const playPauseEmoji = isPaused ? '▶️' : '⏸️';
-    const playPauseStyle = isPaused ? ButtonStyle.Success : ButtonStyle.Secondary;
-
-    let loopStyle = ButtonStyle.Secondary;
-    let loopEmoji = '➡️';
-    if (loopMode === 'track') {
-        loopStyle = ButtonStyle.Primary;
-        loopEmoji = '🔂';
-    } else if (loopMode === 'queue') {
-        loopStyle = ButtonStyle.Primary;
-        loopEmoji = '🔁';
-    }
-
-    // Row 1: playback controls (max 5 buttons per row)
-    const row1 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('music_play_pause').setEmoji(playPauseEmoji).setStyle(playPauseStyle),
-        new ButtonBuilder().setCustomId('music_skip').setEmoji('⏭️').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('music_stop').setEmoji('⏹️').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('music_loop').setEmoji(loopEmoji).setStyle(loopStyle)
-    );
-
-    // Row 2: volume controls
-    const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('music_volume_down').setEmoji('🔉').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('music_volume_up').setEmoji('🔊').setStyle(ButtonStyle.Secondary)
-    );
-
-    return [row1, row2];
 }
 
 module.exports = {
     updateNowPlayingMessage,
-    createNowPlayingEmbed,
-    createProgressBar,
-    createMusicControlButtons,
 };

@@ -139,7 +139,6 @@ class CoreLibrariesInitializer {
         const MutexManager = require('../libraries/MutexManager');
         this.bot.mutexManager = new MutexManager(null, {
             defaultTimeout: 5000,
-            ownerId: `bot-${this.bot.client.user?.id || 'unknown'}`,
         });
         this.bot.client.mutexManager = this.bot.mutexManager;
         logger.info('Mutex manager initialized');
@@ -209,6 +208,12 @@ class CoreLibrariesInitializer {
         this.bot.voiceManager = this.bot.load.library('VoiceManager');
         this.bot.audioPlayer = this.bot.load.library('AudioPlayer');
         this.bot.queueManager = this.bot.load.library('QueueManager');
+        this.bot.client.voiceManager = this.bot.voiceManager;
+        this.bot.client.audioPlayer = this.bot.audioPlayer;
+        this.bot.client.queueManager = this.bot.queueManager;
+        if (this.bot.audioPlayer?.audioStreamService) {
+            this.bot.client.audioStreamService = this.bot.audioPlayer.audioStreamService;
+        }
         logger.info('Voice libraries initialized');
     }
 

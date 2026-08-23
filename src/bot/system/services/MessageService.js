@@ -171,7 +171,7 @@ class MessageService {
                 throw new Error('Schedule time must be in the future');
             }
 
-            const scheduled_id = `scheduled-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+            const scheduled_id = `scheduled-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
             this.scheduled_messages.set(scheduled_id, {
                 channel_id,

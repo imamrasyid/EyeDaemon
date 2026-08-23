@@ -1,27 +1,22 @@
+'use strict';
+
 /**
  * RewardService
  * 
  * Business logic for level rewards functionality.
  * Handles reward CRUD operations and reward application to users.
+ * Synchronized with consolidated schema: level_rewards (id, guild_id, level, type, data_json, created_at).
  */
 
 const BaseService = require('../../../../system/core/BaseService');
+const { randomUUID } = require('crypto');
 
 class RewardService extends BaseService {
-    /**
-     * Create a new RewardService instance
-     * @param {Object} client - Discord client instance
-     * @param {Object} options - Service configuration options
-     */
     constructor(client, options = {}) {
         super(client, options);
         this.tableName = 'level_rewards';
     }
 
-    /**
-     * Initialize service
-     * @returns {Promise<void>}
-     */
     async initialize() {
         await super.initialize();
         this.log('RewardService initialized', 'info');
@@ -29,11 +24,6 @@ class RewardService extends BaseService {
 
     /**
      * Create a new reward
-     * @param {string} guildId - Guild ID
-     * @param {number} level - Level to grant reward at
-     * @param {string} type - Reward type ('role', 'currency', 'item')
-     * @param {Object} data - Reward data (depends on type)
-     * @returns {Promise<Object>} Created reward
      */
     async createReward(guildId, level, type, data) {
         try {
@@ -48,15 +38,15 @@ class RewardService extends BaseService {
                 throw new Error('Level must be at least 1');
             }
 
-            // Validate data based on type
             this.validateRewardData(type, data);
 
-            const rewardId = `${guildId}-${level}-${type}-${Date.now()}`;
+            const rewardId = randomUUID();
             const dataJson = JSON.stringify(data);
+            const now = Math.floor(Date.now() / 1000);
 
             await this.query(
-                `INSERT INTO ${this.tableName} (id, guild_id, level, type, data) VALUES (?, ?, ?, ?, ?)`,
-                [rewardId, guildId, level, type, dataJson]
+                `INSERT INTO ${this.tableName} (id, guild_id, level, type, data_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+                [rewardId, guildId, level, type, dataJson, now]
             );
 
             this.log(`Created reward ${rewardId} for level ${level} in guild ${guildId}`, 'debug');
@@ -75,8 +65,6 @@ class RewardService extends BaseService {
 
     /**
      * Get reward by ID
-     * @param {string} rewardId - Reward ID
-     * @returns {Promise<Object|null>} Reward or null
      */
     async getReward(rewardId) {
         try {
@@ -87,17 +75,16 @@ class RewardService extends BaseService {
                 [rewardId]
             );
 
-            if (!results || results.length === 0) {
-                return null;
-            }
+            if (!results || results.length === 0) return null;
 
             const reward = results[0];
+            const rawData = reward.data_json || reward.data || '{}';
             return {
                 id: reward.id,
                 guildId: reward.guild_id,
                 level: reward.level,
                 type: reward.type,
-                data: JSON.parse(reward.data),
+                data: typeof rawData === 'string' ? JSON.parse(rawData) : rawData,
                 createdAt: reward.created_at
             };
         } catch (error) {
@@ -107,9 +94,6 @@ class RewardService extends BaseService {
 
     /**
      * Update reward
-     * @param {string} rewardId - Reward ID
-     * @param {Object} updates - Fields to update
-     * @returns {Promise<void>}
      */
     async updateReward(rewardId, updates) {
         try {
@@ -122,7 +106,7 @@ class RewardService extends BaseService {
             for (const [key, value] of Object.entries(updates)) {
                 if (allowedFields.includes(key)) {
                     if (key === 'data') {
-                        updateFields.push(`${key} = ?`);
+                        updateFields.push(`data_json = ?`);
                         updateValues.push(JSON.stringify(value));
                     } else {
                         updateFields.push(`${key} = ?`);
@@ -131,10 +115,7 @@ class RewardService extends BaseService {
                 }
             }
 
-            if (updateFields.length === 0) {
-                throw new Error('No valid fields to update');
-            }
-
+            if (updateFields.length === 0) throw new Error('No valid fields to update');
             updateValues.push(rewardId);
 
             await this.query(
@@ -150,18 +131,11 @@ class RewardService extends BaseService {
 
     /**
      * Delete reward
-     * @param {string} rewardId - Reward ID
-     * @returns {Promise<void>}
      */
     async deleteReward(rewardId) {
         try {
             this.validateRequired({ rewardId }, ['rewardId']);
-
-            await this.query(
-                `DELETE FROM ${this.tableName} WHERE id = ?`,
-                [rewardId]
-            );
-
+            await this.query(`DELETE FROM ${this.tableName} WHERE id = ?`, [rewardId]);
             this.log(`Deleted reward ${rewardId}`, 'debug');
         } catch (error) {
             throw this.handleError(error, 'deleteReward', { rewardId });
@@ -169,10 +143,7 @@ class RewardService extends BaseService {
     }
 
     /**
-     * Get rewards for a specific level
-     * @param {string} guildId - Guild ID
-     * @param {number} level - Level
-     * @returns {Promise<Array>} Rewards for the level
+     * Get rewards for level
      */
     async getRewardsForLevel(guildId, level) {
         try {
@@ -183,14 +154,17 @@ class RewardService extends BaseService {
                 [guildId, level]
             );
 
-            return results.map(reward => ({
-                id: reward.id,
-                guildId: reward.guild_id,
-                level: reward.level,
-                type: reward.type,
-                data: JSON.parse(reward.data),
-                createdAt: reward.created_at
-            }));
+            return results.map(reward => {
+                const raw = reward.data_json || reward.data || '{}';
+                return {
+                    id: reward.id,
+                    guildId: reward.guild_id,
+                    level: reward.level,
+                    type: reward.type,
+                    data: typeof raw === 'string' ? JSON.parse(raw) : raw,
+                    createdAt: reward.created_at
+                };
+            });
         } catch (error) {
             throw this.handleError(error, 'getRewardsForLevel', { guildId, level });
         }
@@ -198,8 +172,6 @@ class RewardService extends BaseService {
 
     /**
      * Get all rewards for a guild
-     * @param {string} guildId - Guild ID
-     * @returns {Promise<Array>} All rewards for the guild
      */
     async getGuildRewards(guildId) {
         try {
@@ -210,14 +182,17 @@ class RewardService extends BaseService {
                 [guildId]
             );
 
-            return results.map(reward => ({
-                id: reward.id,
-                guildId: reward.guild_id,
-                level: reward.level,
-                type: reward.type,
-                data: JSON.parse(reward.data),
-                createdAt: reward.created_at
-            }));
+            return results.map(reward => {
+                const raw = reward.data_json || reward.data || '{}';
+                return {
+                    id: reward.id,
+                    guildId: reward.guild_id,
+                    level: reward.level,
+                    type: reward.type,
+                    data: typeof raw === 'string' ? JSON.parse(raw) : raw,
+                    createdAt: reward.created_at
+                };
+            });
         } catch (error) {
             throw this.handleError(error, 'getGuildRewards', { guildId });
         }
@@ -225,24 +200,16 @@ class RewardService extends BaseService {
 
     /**
      * Apply reward to user
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {Object} reward - Reward object
-     * @returns {Promise<void>}
      */
     async applyReward(userId, guildId, reward) {
         try {
             this.validateRequired({ userId, guildId, reward }, ['userId', 'guildId', 'reward']);
 
             const guild = this.getGuild(guildId);
-            if (!guild) {
-                throw new Error('Guild not found');
-            }
+            if (!guild) throw new Error('Guild not found');
 
             const member = await guild.members.fetch(userId).catch(() => null);
-            if (!member) {
-                throw new Error('Member not found');
-            }
+            if (!member) throw new Error('Member not found');
 
             switch (reward.type) {
                 case 'role':
@@ -266,36 +233,23 @@ class RewardService extends BaseService {
 
     /**
      * Remove reward from user
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {Object} reward - Reward object
-     * @returns {Promise<void>}
      */
     async removeReward(userId, guildId, reward) {
         try {
             this.validateRequired({ userId, guildId, reward }, ['userId', 'guildId', 'reward']);
 
             const guild = this.getGuild(guildId);
-            if (!guild) {
-                throw new Error('Guild not found');
-            }
+            if (!guild) throw new Error('Guild not found');
 
             const member = await guild.members.fetch(userId).catch(() => null);
-            if (!member) {
-                throw new Error('Member not found');
-            }
+            if (!member) throw new Error('Member not found');
 
             switch (reward.type) {
                 case 'role':
                     await this.removeRoleReward(member, reward.data);
                     break;
                 case 'currency':
-                    // Currency rewards are not removed
-                    this.log('Currency rewards cannot be removed', 'debug');
-                    break;
                 case 'item':
-                    // Item rewards are not removed
-                    this.log('Item rewards cannot be removed', 'debug');
                     break;
                 default:
                     throw new Error(`Unknown reward type: ${reward.type}`);
@@ -308,20 +262,14 @@ class RewardService extends BaseService {
     }
 
     /**
-     * Sync user rewards based on current level
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {number} currentLevel - User's current level
-     * @returns {Promise<void>}
+     * Sync user rewards
      */
     async syncUserRewards(userId, guildId, currentLevel) {
         try {
             this.validateRequired({ userId, guildId, currentLevel }, ['userId', 'guildId', 'currentLevel']);
 
-            // Get all rewards for the guild
             const allRewards = await this.getGuildRewards(guildId);
 
-            // Apply rewards for levels up to current level
             for (const reward of allRewards) {
                 if (reward.level <= currentLevel) {
                     try {
@@ -338,142 +286,64 @@ class RewardService extends BaseService {
         }
     }
 
-    /**
-     * Apply role reward to member
-     * @param {Object} member - Discord member
-     * @param {Object} data - Reward data with roleId
-     * @returns {Promise<void>}
-     */
     async applyRoleReward(member, data) {
-        if (!data.roleId) {
-            throw new Error('Role reward data must include roleId');
-        }
+        if (!data.roleId) throw new Error('Role reward data must include roleId');
 
         const role = member.guild.roles.cache.get(data.roleId);
-        if (!role) {
-            throw new Error(`Role ${data.roleId} not found`);
-        }
+        if (!role) throw new Error(`Role ${data.roleId} not found`);
 
-        // Check if member already has the role
-        if (member.roles.cache.has(data.roleId)) {
-            this.log(`Member ${member.id} already has role ${data.roleId}`, 'debug');
-            return;
-        }
+        if (member.roles.cache.has(data.roleId)) return;
 
-        // Check bot permissions
         if (!member.guild.members.me.permissions.has('ManageRoles')) {
             throw new Error('Bot does not have ManageRoles permission');
         }
 
-        // Check role hierarchy
         if (role.position >= member.guild.members.me.roles.highest.position) {
-            throw new Error('Cannot assign role: role is higher than bot\'s highest role');
+            throw new Error('Cannot assign role: role is higher than bot role');
         }
 
         await member.roles.add(role);
-        this.log(`Added role ${data.roleId} to member ${member.id}`, 'debug');
     }
 
-    /**
-     * Remove role reward from member
-     * @param {Object} member - Discord member
-     * @param {Object} data - Reward data with roleId
-     * @returns {Promise<void>}
-     */
     async removeRoleReward(member, data) {
-        if (!data.roleId) {
-            throw new Error('Role reward data must include roleId');
-        }
+        if (!data.roleId) throw new Error('Role reward data must include roleId');
 
         const role = member.guild.roles.cache.get(data.roleId);
-        if (!role) {
-            this.log(`Role ${data.roleId} not found, skipping removal`, 'debug');
-            return;
-        }
+        if (!role) return;
 
-        // Check if member has the role
-        if (!member.roles.cache.has(data.roleId)) {
-            this.log(`Member ${member.id} does not have role ${data.roleId}`, 'debug');
-            return;
-        }
+        if (!member.roles.cache.has(data.roleId)) return;
 
         await member.roles.remove(role);
-        this.log(`Removed role ${data.roleId} from member ${member.id}`, 'debug');
     }
 
-    /**
-     * Apply currency reward to user
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {Object} data - Reward data with amount
-     * @returns {Promise<void>}
-     */
     async applyCurrencyReward(userId, guildId, data) {
-        if (!data.amount || data.amount <= 0) {
-            throw new Error('Currency reward data must include positive amount');
-        }
+        if (!data.amount || data.amount <= 0) throw new Error('Currency reward data must include positive amount');
 
-        try {
-            const economyModule = this.client.modules.get('economy');
-            if (!economyModule) {
-                throw new Error('Economy module not available');
-            }
+        const economyModule = this.client.modules.get('economy');
+        if (!economyModule) throw new Error('Economy module not available');
 
-            const economyService = economyModule.getService('EconomyService');
-            if (!economyService) {
-                throw new Error('EconomyService not available');
-            }
+        const economyService = economyModule.getService('EconomyService');
+        if (!economyService) throw new Error('EconomyService not available');
 
-            await economyService.addBalance(userId, guildId, data.amount);
-            this.log(`Added ${data.amount} currency to user ${userId}`, 'debug');
-        } catch (error) {
-            throw new Error(`Failed to apply currency reward: ${error.message}`);
-        }
+        await economyService.addBalance(userId, guildId, data.amount, 'Level reward');
     }
 
-    /**
-     * Apply item reward to user
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {Object} data - Reward data with itemId
-     * @returns {Promise<void>}
-     */
     async applyItemReward(userId, guildId, data) {
-        if (!data.itemId) {
-            throw new Error('Item reward data must include itemId');
-        }
+        if (!data.itemId) throw new Error('Item reward data must include itemId');
 
-        try {
-            const economyModule = this.client.modules.get('economy');
-            if (!economyModule) {
-                throw new Error('Economy module not available');
-            }
+        const economyModule = this.client.modules.get('economy');
+        if (!economyModule) throw new Error('Economy module not available');
 
-            const shopService = economyModule.getService('ShopService');
-            if (!shopService) {
-                throw new Error('ShopService not available');
-            }
+        const shopService = economyModule.getService('ShopService');
+        if (!shopService) throw new Error('ShopService not available');
 
-            // Add item to user's inventory
-            await shopService.addToInventory(userId, guildId, data.itemId, data.quantity || 1);
-            this.log(`Added item ${data.itemId} to user ${userId}'s inventory`, 'debug');
-        } catch (error) {
-            throw new Error(`Failed to apply item reward: ${error.message}`);
-        }
+        await shopService.purchaseItem(userId, guildId, data.itemId, data.quantity || 1);
     }
 
-    /**
-     * Validate reward data based on type
-     * @param {string} type - Reward type
-     * @param {Object} data - Reward data
-     * @throws {Error} If data is invalid
-     */
     validateRewardData(type, data) {
         switch (type) {
             case 'role':
-                if (!data.roleId) {
-                    throw new Error('Role reward must include roleId');
-                }
+                if (!data.roleId) throw new Error('Role reward must include roleId');
                 break;
             case 'currency':
                 if (!data.amount || typeof data.amount !== 'number' || data.amount <= 0) {
@@ -481,12 +351,7 @@ class RewardService extends BaseService {
                 }
                 break;
             case 'item':
-                if (!data.itemId) {
-                    throw new Error('Item reward must include itemId');
-                }
-                if (data.quantity && (typeof data.quantity !== 'number' || data.quantity <= 0)) {
-                    throw new Error('Item quantity must be a positive number');
-                }
+                if (!data.itemId) throw new Error('Item reward must include itemId');
                 break;
             default:
                 throw new Error(`Unknown reward type: ${type}`);

@@ -6,6 +6,7 @@
 
 const BaseInteraction = require('../../../../../system/core/BaseInteraction');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const ResponseHelper = require('../../../../../system/helpers/ResponseHelper');
 
 class HelpMusicButton extends BaseInteraction {
     constructor(client) {
@@ -29,11 +30,11 @@ class HelpMusicButton extends BaseInteraction {
             const commandFields = this.formatCommands(commands);
 
             const embed = new EmbedBuilder()
-                .setColor(0x3498db)
-                .setTitle('🎵 Music Commands')
-                .setDescription('Control music playback and manage playlists')
+                .setColor(ResponseHelper.THEMES.MUSIC)
+                .setTitle('🎵 Music & Audio Commands')
+                .setDescription('Control in-process music playback, real-time filters, and cloud playlists')
                 .addFields(commandFields)
-                .setFooter({ text: 'Click a category button to view other commands' })
+                .setFooter({ text: 'EyeDaemon Music System • Click Back to view other categories' })
                 .setTimestamp();
 
             // Create back button

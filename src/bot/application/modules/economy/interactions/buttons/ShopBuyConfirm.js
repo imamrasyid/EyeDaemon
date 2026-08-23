@@ -77,32 +77,35 @@ class ShopBuyConfirmButton extends BaseInteraction {
                 quantity
             );
 
+            const ResponseHelper = require('../../../../../system/helpers/ResponseHelper');
+
             if (!result.success) {
+                const errorEmbed = ResponseHelper.error('Purchase Failed', result.message || 'Unable to process purchase.');
                 await interaction.update({
-                    content: `❌ Purchase failed: ${result.message}`,
-                    embeds: [],
+                    embeds: [errorEmbed],
                     components: []
                 });
                 return;
             }
 
             // Create success embed
-            const successEmbed = new EmbedBuilder()
-                .setColor(0x2ecc71)
-                .setTitle('✅ Purchase Successful!')
-                .setDescription(`You purchased **${quantity}x ${result.item.name}**`)
-                .addFields(
-                    { name: 'Total Cost', value: `${result.totalPrice} coins`, inline: true },
-                    { name: 'New Balance', value: `${result.newBalance} coins`, inline: true }
-                )
-                .setTimestamp();
+            const successEmbed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.SUCCESS,
+                title: '🛍️ Purchase Successful!',
+                description: `Successfully purchased **${quantity}x ${result.item.name}**!`,
+                fields: [
+                    { name: 'Total Cost', value: ResponseHelper.formatMoney(result.totalPrice), inline: true },
+                    { name: 'New Wallet Balance', value: ResponseHelper.formatMoney(result.newBalance), inline: true },
+                ],
+                footerText: 'Items have been added to your /inventory'
+            });
 
             // If item has a role, mention it
             if (result.item.role_id) {
                 const role = interaction.guild.roles.cache.get(result.item.role_id);
                 if (role) {
                     successEmbed.addFields({
-                        name: 'Role Assigned',
+                        name: '🎭 Role Assigned',
                         value: `You received the ${role} role!`,
                         inline: false
                     });
@@ -114,7 +117,7 @@ class ShopBuyConfirmButton extends BaseInteraction {
                     } catch (roleError) {
                         this.log(`Failed to assign role: ${roleError.message}`, 'error');
                         successEmbed.addFields({
-                            name: 'Note',
+                            name: '⚠️ Role Notice',
                             value: 'Failed to automatically assign role. Please contact an administrator.',
                             inline: false
                         });

@@ -1,65 +1,62 @@
+'use strict';
+
 /**
  * PlaylistService
  * 
  * Service for managing music playlists.
- * Handles playlist CRUD operations and track management.
+ * Synchronized with consolidated schema:
+ * - playlists (id, guild_id, user_id, name, description, public, data_json, created_at, updated_at)
+ * - playlist_items (id AUTOINCREMENT, playlist_id, position, title, url, duration, requested_by, added_at)
  */
 
 const BaseService = require('../../../../system/core/BaseService');
 const { randomUUID } = require('crypto');
 
 class PlaylistService extends BaseService {
-    /**
-     * Create a new PlaylistService instance
-     * @param {Object} client - Discord client instance
-     * @param {Object} options - Service configuration options
-     */
     constructor(client, options = {}) {
         super(client, options);
-
-        // Maximum tracks per playlist
         this.MAX_TRACKS = 50;
     }
 
     /**
      * Create a new playlist
-     * @param {Object} params - Playlist parameters
-     * @param {string} params.userId - User ID
-     * @param {string} params.guildId - Guild ID
-     * @param {string} params.name - Playlist name
-     * @param {boolean} params.isPublic - Whether playlist is public
-     * @returns {Promise<Object>} Created playlist
      */
-    async createPlaylist({ userId, guildId, name, isPublic = false }) {
+    async createPlaylist({ userId, guildId, name, isPublic = false, description = null }) {
         this.validateRequired({ userId, guildId, name }, ['userId', 'guildId', 'name']);
 
         try {
             const db = this.getDatabase();
             if (!db) throw new Error('Database not available');
 
-            // Validate name length
             if (name.length < 1 || name.length > 100) {
                 throw new Error('Playlist name must be between 1 and 100 characters');
             }
 
-            // Check if user already has a playlist with this name
-            const existing = db.prepare(`
-                SELECT id FROM music_playlists
-                WHERE user_id = ? AND guild_id = ? AND name = ?
-            `).get(userId, guildId, name);
+            const existing = await db.query(
+                `SELECT id FROM playlists WHERE user_id = ? AND guild_id = ? AND name = ?`,
+                [userId, guildId, name]
+            );
 
-            if (existing) {
+            if (existing && existing.length > 0) {
                 throw new Error('You already have a playlist with this name');
             }
 
-            // Create playlist
             const playlistId = randomUUID();
-            const stmt = db.prepare(`
-                INSERT INTO music_playlists (id, guild_id, user_id, name, is_public, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            `);
+            const now = Math.floor(Date.now() / 1000);
 
-            stmt.run(playlistId, guildId, userId, name, isPublic ? 1 : 0);
+            // Ensure user profile exists for FK
+            await db.query(
+                `INSERT INTO user_profiles (user_id, created_at, updated_at)
+                 VALUES (?, ?, ?)
+                 ON CONFLICT(user_id) DO NOTHING`,
+                [userId, now, now]
+            );
+
+            await db.query(
+                `INSERT INTO playlists (id, guild_id, user_id, name, description, public, data_json, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)`,
+                [playlistId, guildId, userId, name, description, isPublic ? 1 : 0, now, now]
+            );
 
             this.log(`Created playlist ${playlistId} for user ${userId}`, 'info');
 
@@ -69,6 +66,7 @@ class PlaylistService extends BaseService {
                 userId,
                 name,
                 isPublic,
+                description,
                 trackCount: 0,
             };
         } catch (error) {
@@ -78,9 +76,6 @@ class PlaylistService extends BaseService {
 
     /**
      * Delete a playlist
-     * @param {string} playlistId - Playlist ID
-     * @param {string} userId - User ID (for ownership check)
-     * @returns {Promise<boolean>} True if deleted successfully
      */
     async deletePlaylist(playlistId, userId) {
         this.validateRequired({ playlistId, userId }, ['playlistId', 'userId']);
@@ -89,22 +84,19 @@ class PlaylistService extends BaseService {
             const db = this.getDatabase();
             if (!db) throw new Error('Database not available');
 
-            // Check ownership
-            const playlist = db.prepare(`
-                SELECT id FROM music_playlists
-                WHERE id = ? AND user_id = ?
-            `).get(playlistId, userId);
+            const rows = await db.query(
+                `SELECT id FROM playlists WHERE id = ? AND user_id = ?`,
+                [playlistId, userId]
+            );
 
-            if (!playlist) {
+            if (!rows || rows.length === 0) {
                 throw new Error('Playlist not found or you do not own this playlist');
             }
 
-            // Delete playlist (tracks will be deleted by CASCADE)
-            const stmt = db.prepare('DELETE FROM music_playlists WHERE id = ?');
-            stmt.run(playlistId);
+            await db.query('DELETE FROM playlist_items WHERE playlist_id = ?', [playlistId]);
+            await db.query('DELETE FROM playlists WHERE id = ?', [playlistId]);
 
             this.log(`Deleted playlist ${playlistId}`, 'info');
-
             return true;
         } catch (error) {
             throw this.handleError(error, 'deletePlaylist');
@@ -113,9 +105,6 @@ class PlaylistService extends BaseService {
 
     /**
      * Get a playlist by ID
-     * @param {string} playlistId - Playlist ID
-     * @param {string} userId - User ID (optional, for access check)
-     * @returns {Promise<Object|null>} Playlist object or null
      */
     async getPlaylist(playlistId, userId = null) {
         this.validateRequired({ playlistId }, ['playlistId']);
@@ -124,21 +113,20 @@ class PlaylistService extends BaseService {
             const db = this.getDatabase();
             if (!db) throw new Error('Database not available');
 
-            // Get playlist
-            const playlist = db.prepare(`
-                SELECT p.*, COUNT(t.id) as track_count
-                FROM music_playlists p
-                LEFT JOIN music_playlist_tracks t ON p.id = t.playlist_id
-                WHERE p.id = ?
-                GROUP BY p.id
-            `).get(playlistId);
+            const rows = await db.query(
+                `SELECT p.*, COUNT(t.id) as track_count
+                 FROM playlists p
+                 LEFT JOIN playlist_items t ON p.id = t.playlist_id
+                 WHERE p.id = ?
+                 GROUP BY p.id`,
+                [playlistId]
+            );
 
-            if (!playlist) {
-                return null;
-            }
+            if (!rows || rows.length === 0) return null;
 
-            // Check access (must be owner or public)
-            if (userId && playlist.user_id !== userId && !playlist.is_public) {
+            const playlist = rows[0];
+
+            if (userId && playlist.user_id !== userId && !playlist.public) {
                 throw new Error('You do not have access to this playlist');
             }
 
@@ -147,8 +135,9 @@ class PlaylistService extends BaseService {
                 guildId: playlist.guild_id,
                 userId: playlist.user_id,
                 name: playlist.name,
-                isPublic: Boolean(playlist.is_public),
-                trackCount: playlist.track_count,
+                description: playlist.description,
+                isPublic: Boolean(playlist.public),
+                trackCount: playlist.track_count || 0,
                 createdAt: playlist.created_at,
                 updatedAt: playlist.updated_at,
             };
@@ -158,10 +147,7 @@ class PlaylistService extends BaseService {
     }
 
     /**
-     * Get user's playlists
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @returns {Promise<Array>} Array of playlists
+     * Get user playlists
      */
     async getUserPlaylists(userId, guildId) {
         this.validateRequired({ userId, guildId }, ['userId', 'guildId']);
@@ -170,28 +156,24 @@ class PlaylistService extends BaseService {
             const db = this.getDatabase();
             if (!db) throw new Error('Database not available');
 
-            const playlists = db.prepare(`
-                SELECT p.*, COUNT(t.id) as track_count
-                FROM music_playlists p
-                LEFT JOIN music_playlist_tracks t ON p.id = t.playlist_id
-                WHERE p.user_id = ? AND p.guild_id = ?
-                GROUP BY p.id
-                ORDER BY p.created_at DESC
-            `).all(userId, guildId);
+            const playlists = await db.query(
+                `SELECT p.*, COUNT(t.id) as track_count
+                 FROM playlists p
+                 LEFT JOIN playlist_items t ON p.id = t.playlist_id
+                 WHERE p.user_id = ? AND p.guild_id = ?
+                 GROUP BY p.id
+                 ORDER BY p.created_at DESC`,
+                [userId, guildId]
+            );
 
-            // Ensure playlists is always an array
-            if (!Array.isArray(playlists)) {
-                this.log('Database query returned non-array result, returning empty array', 'warn');
-                return [];
-            }
-
-            return playlists.map(p => ({
+            return (playlists || []).map(p => ({
                 id: p.id,
                 guildId: p.guild_id,
                 userId: p.user_id,
                 name: p.name,
-                isPublic: Boolean(p.is_public),
-                trackCount: p.track_count,
+                description: p.description,
+                isPublic: Boolean(p.public),
+                trackCount: p.track_count || 0,
                 createdAt: p.created_at,
                 updatedAt: p.updated_at,
             }));
@@ -201,10 +183,7 @@ class PlaylistService extends BaseService {
     }
 
     /**
-     * Get public playlists for a guild
-     * @param {string} guildId - Guild ID
-     * @param {number} limit - Maximum number of playlists to return
-     * @returns {Promise<Array>} Array of public playlists
+     * Get public playlists for guild
      */
     async getPublicPlaylists(guildId, limit = 20) {
         this.validateRequired({ guildId }, ['guildId']);
@@ -213,29 +192,25 @@ class PlaylistService extends BaseService {
             const db = this.getDatabase();
             if (!db) throw new Error('Database not available');
 
-            const playlists = db.prepare(`
-                SELECT p.*, COUNT(t.id) as track_count
-                FROM music_playlists p
-                LEFT JOIN music_playlist_tracks t ON p.id = t.playlist_id
-                WHERE p.guild_id = ? AND p.is_public = 1
-                GROUP BY p.id
-                ORDER BY p.created_at DESC
-                LIMIT ?
-            `).all(guildId, limit);
+            const playlists = await db.query(
+                `SELECT p.*, COUNT(t.id) as track_count
+                 FROM playlists p
+                 LEFT JOIN playlist_items t ON p.id = t.playlist_id
+                 WHERE p.guild_id = ? AND p.public = 1
+                 GROUP BY p.id
+                 ORDER BY p.created_at DESC
+                 LIMIT ?`,
+                [guildId, limit]
+            );
 
-            // Ensure playlists is always an array
-            if (!Array.isArray(playlists)) {
-                this.log('Database query returned non-array result, returning empty array', 'warn');
-                return [];
-            }
-
-            return playlists.map(p => ({
+            return (playlists || []).map(p => ({
                 id: p.id,
                 guildId: p.guild_id,
                 userId: p.user_id,
                 name: p.name,
-                isPublic: Boolean(p.is_public),
-                trackCount: p.track_count,
+                description: p.description,
+                isPublic: Boolean(p.public),
+                trackCount: p.track_count || 0,
                 createdAt: p.created_at,
                 updatedAt: p.updated_at,
             }));
@@ -246,10 +221,6 @@ class PlaylistService extends BaseService {
 
     /**
      * Add track to playlist
-     * @param {string} playlistId - Playlist ID
-     * @param {string} userId - User ID (for ownership check)
-     * @param {Object} track - Track object
-     * @returns {Promise<number>} Position of added track
      */
     async addTrack(playlistId, userId, track) {
         this.validateRequired({ playlistId, userId, track }, ['playlistId', 'userId', 'track']);
@@ -258,48 +229,50 @@ class PlaylistService extends BaseService {
             const db = this.getDatabase();
             if (!db) throw new Error('Database not available');
 
-            // Check ownership
-            const playlist = db.prepare(`
-                SELECT id FROM music_playlists
-                WHERE id = ? AND user_id = ?
-            `).get(playlistId, userId);
+            const owns = await db.query(
+                `SELECT id FROM playlists WHERE id = ? AND user_id = ?`,
+                [playlistId, userId]
+            );
 
-            if (!playlist) {
+            if (!owns || owns.length === 0) {
                 throw new Error('Playlist not found or you do not own this playlist');
             }
 
-            // Check track count
-            const trackCount = db.prepare(`
-                SELECT COUNT(*) as count FROM music_playlist_tracks
-                WHERE playlist_id = ?
-            `).get(playlistId);
+            const countRows = await db.query(
+                `SELECT COUNT(*) as count FROM playlist_items WHERE playlist_id = ?`,
+                [playlistId]
+            );
 
-            if (trackCount.count >= this.MAX_TRACKS) {
+            const count = countRows?.[0]?.count || 0;
+            if (count >= this.MAX_TRACKS) {
                 throw new Error(`Playlist is full! Maximum ${this.MAX_TRACKS} tracks allowed.`);
             }
 
-            // Get next position
-            const maxPosition = db.prepare(`
-                SELECT MAX(position) as max_pos FROM music_playlist_tracks
-                WHERE playlist_id = ?
-            `).get(playlistId);
+            const maxPosRows = await db.query(
+                `SELECT MAX(position) as max_pos FROM playlist_items WHERE playlist_id = ?`,
+                [playlistId]
+            );
 
-            const position = (maxPosition.max_pos || 0) + 1;
+            const position = (maxPosRows?.[0]?.max_pos || 0) + 1;
+            const now = Math.floor(Date.now() / 1000);
 
-            // Add track
-            const stmt = db.prepare(`
-                INSERT INTO music_playlist_tracks (playlist_id, track_data, position, added_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            `);
+            await db.query(
+                `INSERT INTO playlist_items (playlist_id, position, title, url, duration, requested_by, added_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    playlistId,
+                    position,
+                    track.title || 'Unknown Title',
+                    track.url || track.uri || '',
+                    track.duration || 0,
+                    userId,
+                    now
+                ]
+            );
 
-            stmt.run(playlistId, JSON.stringify(track), position);
-
-            // Update playlist updated_at
-            db.prepare('UPDATE music_playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-                .run(playlistId);
+            await db.query('UPDATE playlists SET updated_at = ? WHERE id = ?', [now, playlistId]);
 
             this.log(`Added track to playlist ${playlistId} at position ${position}`, 'info');
-
             return position;
         } catch (error) {
             throw this.handleError(error, 'addTrack');
@@ -308,10 +281,6 @@ class PlaylistService extends BaseService {
 
     /**
      * Remove track from playlist
-     * @param {string} playlistId - Playlist ID
-     * @param {string} userId - User ID (for ownership check)
-     * @param {number} position - Track position (1-based)
-     * @returns {Promise<boolean>} True if removed successfully
      */
     async removeTrack(playlistId, userId, position) {
         this.validateRequired({ playlistId, userId, position }, ['playlistId', 'userId', 'position']);
@@ -320,40 +289,31 @@ class PlaylistService extends BaseService {
             const db = this.getDatabase();
             if (!db) throw new Error('Database not available');
 
-            // Check ownership
-            const playlist = db.prepare(`
-                SELECT id FROM music_playlists
-                WHERE id = ? AND user_id = ?
-            `).get(playlistId, userId);
+            const owns = await db.query(
+                `SELECT id FROM playlists WHERE id = ? AND user_id = ?`,
+                [playlistId, userId]
+            );
 
-            if (!playlist) {
+            if (!owns || owns.length === 0) {
                 throw new Error('Playlist not found or you do not own this playlist');
             }
 
-            // Delete track
-            const stmt = db.prepare(`
-                DELETE FROM music_playlist_tracks
-                WHERE playlist_id = ? AND position = ?
-            `);
+            const result = await db.query(
+                `DELETE FROM playlist_items WHERE playlist_id = ? AND position = ?`,
+                [playlistId, position]
+            );
 
-            const result = stmt.run(playlistId, position);
-
-            if (result.changes === 0) {
+            if (!result || result.changes === 0) {
                 throw new Error('Track not found at this position');
             }
 
-            // Reorder remaining tracks
-            db.prepare(`
-                UPDATE music_playlist_tracks
-                SET position = position - 1
-                WHERE playlist_id = ? AND position > ?
-            `).run(playlistId, position);
+            await db.query(
+                `UPDATE playlist_items SET position = position - 1 WHERE playlist_id = ? AND position > ?`,
+                [playlistId, position]
+            );
 
-            // Update playlist updated_at
-            db.prepare('UPDATE music_playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-                .run(playlistId);
-
-            this.log(`Removed track from playlist ${playlistId} at position ${position}`, 'info');
+            const now = Math.floor(Date.now() / 1000);
+            await db.query('UPDATE playlists SET updated_at = ? WHERE id = ?', [now, playlistId]);
 
             return true;
         } catch (error) {
@@ -362,10 +322,7 @@ class PlaylistService extends BaseService {
     }
 
     /**
-     * Get tracks from playlist
-     * @param {string} playlistId - Playlist ID
-     * @param {string} userId - User ID (optional, for access check)
-     * @returns {Promise<Array>} Array of tracks
+     * Load playlist tracks
      */
     async loadPlaylistTracks(playlistId, userId = null) {
         this.validateRequired({ playlistId }, ['playlistId']);
@@ -374,32 +331,29 @@ class PlaylistService extends BaseService {
             const db = this.getDatabase();
             if (!db) throw new Error('Database not available');
 
-            // Check access
-            const playlist = db.prepare(`
-                SELECT user_id, is_public FROM music_playlists
-                WHERE id = ?
-            `).get(playlistId);
+            const rows = await db.query(
+                `SELECT user_id, public FROM playlists WHERE id = ?`,
+                [playlistId]
+            );
 
-            if (!playlist) {
-                throw new Error('Playlist not found');
-            }
+            if (!rows || rows.length === 0) throw new Error('Playlist not found');
 
-            // Check access (must be owner or public)
-            if (userId && playlist.user_id !== userId && !playlist.is_public) {
+            const playlist = rows[0];
+            if (userId && playlist.user_id !== userId && !playlist.public) {
                 throw new Error('You do not have access to this playlist');
             }
 
-            // Get tracks
-            const tracks = db.prepare(`
-                SELECT track_data, position
-                FROM music_playlist_tracks
-                WHERE playlist_id = ?
-                ORDER BY position ASC
-            `).all(playlistId);
+            const tracks = await db.query(
+                `SELECT * FROM playlist_items WHERE playlist_id = ? ORDER BY position ASC`,
+                [playlistId]
+            );
 
-            return tracks.map(t => ({
-                ...JSON.parse(t.track_data),
+            return (tracks || []).map(t => ({
+                title: t.title,
+                url: t.url,
+                duration: t.duration,
                 position: t.position,
+                requestedBy: t.requested_by,
             }));
         } catch (error) {
             throw this.handleError(error, 'loadPlaylistTracks');
@@ -408,44 +362,36 @@ class PlaylistService extends BaseService {
 
     /**
      * Save current queue as playlist
-     * @param {Object} params - Save parameters
-     * @param {string} params.userId - User ID
-     * @param {string} params.guildId - Guild ID
-     * @param {string} params.name - Playlist name
-     * @param {Array} params.tracks - Array of tracks
-     * @param {boolean} params.isPublic - Whether playlist is public
-     * @returns {Promise<Object>} Created playlist
      */
     async saveCurrentQueue({ userId, guildId, name, tracks, isPublic = false }) {
         this.validateRequired({ userId, guildId, name, tracks }, ['userId', 'guildId', 'name', 'tracks']);
 
         try {
-            // Validate track count
-            if (tracks.length === 0) {
-                throw new Error('Cannot save empty queue');
-            }
+            if (tracks.length === 0) throw new Error('Cannot save empty queue');
+            if (tracks.length > this.MAX_TRACKS) throw new Error(`Cannot save more than ${this.MAX_TRACKS} tracks`);
 
-            if (tracks.length > this.MAX_TRACKS) {
-                throw new Error(`Cannot save more than ${this.MAX_TRACKS} tracks`);
-            }
-
-            // Create playlist
             const playlist = await this.createPlaylist({ userId, guildId, name, isPublic });
-
-            // Add tracks
             const db = this.getDatabase();
             if (!db) throw new Error('Database not available');
 
-            const stmt = db.prepare(`
-                INSERT INTO music_playlist_tracks (playlist_id, track_data, position, added_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            `);
+            const now = Math.floor(Date.now() / 1000);
 
             for (let i = 0; i < tracks.length; i++) {
-                stmt.run(playlist.id, JSON.stringify(tracks[i]), i + 1);
+                const t = tracks[i];
+                await db.query(
+                    `INSERT INTO playlist_items (playlist_id, position, title, url, duration, requested_by, added_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        playlist.id,
+                        i + 1,
+                        t.title || 'Unknown Title',
+                        t.url || t.uri || '',
+                        t.duration || 0,
+                        userId,
+                        now
+                    ]
+                );
             }
-
-            this.log(`Saved ${tracks.length} tracks to playlist ${playlist.id}`, 'info');
 
             return {
                 ...playlist,
@@ -458,12 +404,6 @@ class PlaylistService extends BaseService {
 
     /**
      * Update playlist settings
-     * @param {string} playlistId - Playlist ID
-     * @param {string} userId - User ID (for ownership check)
-     * @param {Object} updates - Updates to apply
-     * @param {string} updates.name - New name (optional)
-     * @param {boolean} updates.isPublic - New public status (optional)
-     * @returns {Promise<boolean>} True if updated successfully
      */
     async updatePlaylist(playlistId, userId, updates) {
         this.validateRequired({ playlistId, userId }, ['playlistId', 'userId']);
@@ -472,13 +412,12 @@ class PlaylistService extends BaseService {
             const db = this.getDatabase();
             if (!db) throw new Error('Database not available');
 
-            // Check ownership
-            const playlist = db.prepare(`
-                SELECT id FROM music_playlists
-                WHERE id = ? AND user_id = ?
-            `).get(playlistId, userId);
+            const owns = await db.query(
+                `SELECT id FROM playlists WHERE id = ? AND user_id = ?`,
+                [playlistId, userId]
+            );
 
-            if (!playlist) {
+            if (!owns || owns.length === 0) {
                 throw new Error('Playlist not found or you do not own this playlist');
             }
 
@@ -494,26 +433,21 @@ class PlaylistService extends BaseService {
             }
 
             if (updates.isPublic !== undefined) {
-                updateFields.push('is_public = ?');
+                updateFields.push('public = ?');
                 values.push(updates.isPublic ? 1 : 0);
             }
 
-            if (updateFields.length === 0) {
-                return true; // Nothing to update
-            }
+            if (updateFields.length === 0) return true;
 
-            updateFields.push('updated_at = CURRENT_TIMESTAMP');
+            const now = Math.floor(Date.now() / 1000);
+            updateFields.push('updated_at = ?');
+            values.push(now);
             values.push(playlistId);
 
-            const stmt = db.prepare(`
-                UPDATE music_playlists
-                SET ${updateFields.join(', ')}
-                WHERE id = ?
-            `);
-
-            stmt.run(...values);
-
-            this.log(`Updated playlist ${playlistId}`, 'info');
+            await db.query(
+                `UPDATE playlists SET ${updateFields.join(', ')} WHERE id = ?`,
+                values
+            );
 
             return true;
         } catch (error) {

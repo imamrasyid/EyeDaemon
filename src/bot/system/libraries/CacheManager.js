@@ -394,53 +394,19 @@ class CacheManager {
         try {
             const now = Date.now();
 
-            let totalEntries;
-            let expiredEntries;
+            let totalEntries = 0;
+            let expiredEntries = 0;
 
-            // Try to use cache_stats table with pre-computed counts (optimized for Turso)
-            try {
-                const statsResult = await this.database.queryOne(`
-                    SELECT total_entries as total, expired_entries as expired
-                    FROM cache_stats
-                    WHERE id = 1
-                `);
-
-                if (statsResult) {
-                    totalEntries = statsResult.total || 0;
-                    expiredEntries = statsResult.expired || 0;
-                    this.stats.totalEntries = totalEntries;
-                } else {
-                    // Fallback to COUNT queries if cache_stats doesn't exist yet
-                    throw new Error('cache_stats table not found');
-                }
-            } catch (error) {
-                // Fallback to original COUNT queries if cache_stats not available
-                this.log('cache_stats table not available, using COUNT queries (consider running migration 0003)', 'warn');
-
-                if (this.stats.totalEntries !== null) {
-                    // Use in-memory counter for total — only query expired count
-                    totalEntries = this.stats.totalEntries;
-                    const expiredSQL = `
-                        SELECT COUNT(*) as expired 
-                        FROM ${this.config.tableName} 
-                        WHERE expires_at <= ?
-                    `;
-                    const expiredResult = await this.database.queryOne(expiredSQL, [now]);
-                    expiredEntries = expiredResult?.expired || 0;
-                } else {
-                    // First call: fetch both counts in a single query, then cache total in-memory
-                    const statsSQL = `
-                        SELECT
-                            COUNT(*) as total,
-                            SUM(CASE WHEN expires_at <= ? THEN 1 ELSE 0 END) as expired
-                        FROM ${this.config.tableName}
-                    `;
-                    const statsResult = await this.database.queryOne(statsSQL, [now]);
-                    totalEntries = statsResult?.total || 0;
-                    expiredEntries = statsResult?.expired || 0;
-                    this.stats.totalEntries = totalEntries;
-                }
-            }
+            const statsSQL = `
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN expires_at <= ? THEN 1 ELSE 0 END) as expired
+                FROM ${this.config.tableName}
+            `;
+            const statsResult = await this.database.queryOne(statsSQL, [now]);
+            totalEntries = statsResult?.total || 0;
+            expiredEntries = statsResult?.expired || 0;
+            this.stats.totalEntries = totalEntries;
 
             // Calculate hit rate
             const totalRequests = this.stats.hits + this.stats.misses;
@@ -449,7 +415,7 @@ class CacheManager {
                 : 0;
 
             // Calculate active entries
-            const activeEntries = totalEntries - expiredEntries;
+            const activeEntries = Math.max(0, totalEntries - expiredEntries);
 
             return {
                 // Request statistics

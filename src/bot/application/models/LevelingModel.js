@@ -1,17 +1,15 @@
+'use strict';
+
 /**
  * LevelingModel
  * 
- * Model for managing leveling data including XP, levels, and leaderboards.
- * Updated for new Turso DB schema with user_levels table.
+ * Manages user leveling and XP data.
+ * Synchronized with consolidated schema: user_levels (user_id, guild_id, xp, level, last_message_at, created_at, updated_at).
  */
 
 const Model = require('../../system/core/Model');
 
 class LevelingModel extends Model {
-    /**
-     * Create a new LevelingModel instance
-     * @param {Object} instance - The parent instance
-     */
     constructor(instance) {
         super(instance);
         this.tableName = 'user_levels';
@@ -21,35 +19,49 @@ class LevelingModel extends Model {
      * Get user level information
      * @param {string} userId - User ID
      * @param {string} guildId - Guild ID
-     * @returns {Promise<Object>} Level information
+     * @returns {Promise<Object|null>}
      */
     async getUserLevel(userId, guildId) {
         try {
-            const levelData = await this.findOneBy({
-                guild_id: guildId,
-                user_id: userId
-            });
+            const rows = await this.query(
+                `SELECT user_id, guild_id, xp, level, last_message_at, created_at, updated_at
+                 FROM user_levels
+                 WHERE user_id = ? AND guild_id = ?`,
+                [userId, guildId]
+            );
 
-            if (levelData) {
+            if (rows && rows.length > 0) {
+                const levelData = rows[0];
                 const xpForNextLevel = this.calculateXPForLevel(levelData.level + 1);
                 const xpForCurrentLevel = this.calculateXPForLevel(levelData.level);
                 const xpInCurrentLevel = levelData.xp - xpForCurrentLevel;
-                const xpNeededForNextLevel = xpForNextLevel - xpForCurrentLevel;
-                const progress = (xpInCurrentLevel / xpNeededForNextLevel) * 100;
+                const xpNeededForNextLevel = Math.max(1, xpForNextLevel - xpForCurrentLevel);
+                const progress = Math.min(100, Math.max(0, (xpInCurrentLevel / xpNeededForNextLevel) * 100));
 
                 return {
+                    userId: levelData.user_id,
+                    guildId: levelData.guild_id,
                     xp: levelData.xp,
                     level: levelData.level,
-                    totalMessages: levelData.total_messages,
-                    voiceMinutes: levelData.voice_minutes,
-                    lastXpAt: levelData.last_xp_at,
+                    lastMessageAt: levelData.last_message_at,
+                    totalMessages: Math.floor(levelData.xp / 15), // estimate from xp
                     xpForNextLevel,
-                    xpInCurrentLevel,
+                    xpInCurrentLevel: Math.max(0, xpInCurrentLevel),
                     progress
                 };
             }
 
-            return null;
+            return {
+                userId,
+                guildId,
+                xp: 0,
+                level: 0,
+                lastMessageAt: null,
+                totalMessages: 0,
+                xpForNextLevel: this.calculateXPForLevel(1),
+                xpInCurrentLevel: 0,
+                progress: 0
+            };
         } catch (error) {
             this.log(`Error getting level for user ${userId}: ${error.message}`, 'error');
             throw error;
@@ -57,63 +69,42 @@ class LevelingModel extends Model {
     }
 
     /**
-     * Add XP to user
-     * Uses atomic SQL increment to prevent race conditions from concurrent XP additions.
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {number} xp - XP to add
-     * @returns {Promise<Object>} Level up information
+     * Add XP to user atomically
+     * @param {string} userId
+     * @param {string} guildId
+     * @param {number} xp
+     * @returns {Promise<Object>}
      */
     async addXP(userId, guildId, xp) {
         try {
             await this._ensureLevelRecord(userId, guildId);
 
-            // Apply XP multiplier from guild settings
-            let multiplier = 1.0;
-            try {
-                if (this.instance.client && this.instance.client.modules) {
-                    const adminModule = this.instance.client.modules.get('admin');
-                    if (adminModule) {
-                        const guildConfigService = adminModule.getService('GuildConfigService');
-                        if (guildConfigService) {
-                            const configuredMultiplier = await guildConfigService.getSetting(guildId, 'leveling_xp_multiplier');
-                            if (configuredMultiplier !== undefined && configuredMultiplier !== null) {
-                                multiplier = configuredMultiplier;
-                            }
-                        }
-                    }
-                }
-            } catch (error) {
-                this.log(`Error getting XP multiplier from config: ${error.message}`, 'warn');
-            }
-
-            const adjustedXP = Math.floor(xp * multiplier);
             const now = Math.floor(Date.now() / 1000);
+            const beforeRows = await this.query(
+                `SELECT xp, level FROM user_levels WHERE user_id = ? AND guild_id = ?`,
+                [userId, guildId]
+            );
 
-            // Read current state before atomic update
-            const before = await this.findOneBy({ guild_id: guildId, user_id: userId });
-            const oldXP = before.xp || 0;
-            const oldLevel = before.level || 1;
-            const newXP = oldXP + adjustedXP;
+            const oldXP = beforeRows?.[0]?.xp || 0;
+            const oldLevel = beforeRows?.[0]?.level || 0;
+            const newXP = oldXP + xp;
             const newLevel = this.calculateLevelFromXP(newXP);
 
-            // Atomic increment — avoids read-then-write race
             await this.query(
-                `UPDATE ${this.tableName}
-                 SET xp             = xp + ?,
-                     level          = ?,
-                     total_messages = total_messages + 1,
-                     last_xp_at     = ?,
-                     updated_at     = ?
-                 WHERE guild_id = ? AND user_id = ?`,
-                [adjustedXP, newLevel, now, now, guildId, userId]
+                `UPDATE user_levels
+                 SET xp = ?,
+                     level = ?,
+                     last_message_at = ?,
+                     updated_at = ?
+                 WHERE user_id = ? AND guild_id = ?`,
+                [newXP, newLevel, now, now, userId, guildId]
             );
 
             return {
                 leveledUp: newLevel > oldLevel,
                 oldLevel,
                 newLevel,
-                xpGained: adjustedXP,
+                xpGained: xp,
                 oldXP,
                 newXP,
                 guildId
@@ -125,49 +116,47 @@ class LevelingModel extends Model {
     }
 
     /**
-     * Add XP to multiple users (batch operation)
-     * All reads and writes use the transaction connection for true atomicity.
-     * @param {Array<Object>} updates - Array of {userId, guildId, xp} objects
-     * @returns {Promise<Array>} Array of level up results
+     * Batch add XP
+     * @param {Array<Object>} updates
+     * @returns {Promise<Array>}
      */
     async batchAddXP(updates) {
         try {
-            // Ensure all records exist before entering transaction
             for (const { userId, guildId } of updates) {
                 await this._ensureLevelRecord(userId, guildId);
             }
 
             const results = [];
+            const now = Math.floor(Date.now() / 1000);
 
-            await this.db.transaction(async (db) => {
-                const now = Math.floor(Date.now() / 1000);
-
+            await this.db.transaction(async (tx) => {
                 for (const { userId, guildId, xp } of updates) {
-                    // Read inside transaction using transaction connection
-                    const rows = await db.query(
-                        `SELECT xp, level FROM ${this.tableName} WHERE guild_id = ? AND user_id = ?`,
-                        [guildId, userId]
+                    const rows = await tx.query(
+                        `SELECT xp, level FROM user_levels WHERE user_id = ? AND guild_id = ?`,
+                        [userId, guildId]
                     );
 
-                    const row = rows?.[0];
-                    const oldXP = row?.xp || 0;
-                    const oldLevel = row?.level || 1;
+                    const oldXP = rows?.[0]?.xp || 0;
+                    const oldLevel = rows?.[0]?.level || 0;
                     const newXP = oldXP + xp;
                     const newLevel = this.calculateLevelFromXP(newXP);
 
-                    await db.query(
-                        `UPDATE ${this.tableName}
-                         SET xp = ?, level = ?, total_messages = total_messages + 1,
-                             last_xp_at = ?, updated_at = ?
-                         WHERE guild_id = ? AND user_id = ?`,
-                        [newXP, newLevel, now, now, guildId, userId]
+                    await tx.query(
+                        `UPDATE user_levels
+                         SET xp = ?, level = ?, last_message_at = ?, updated_at = ?
+                         WHERE user_id = ? AND guild_id = ?`,
+                        [newXP, newLevel, now, now, userId, guildId]
                     );
 
                     results.push({
-                        userId, guildId,
+                        userId,
+                        guildId,
                         leveledUp: newLevel > oldLevel,
-                        oldLevel, newLevel,
-                        xpGained: xp, oldXP, newXP
+                        oldLevel,
+                        newLevel,
+                        xpGained: xp,
+                        oldXP,
+                        newXP
                     });
                 }
             });
@@ -180,34 +169,30 @@ class LevelingModel extends Model {
     }
 
     /**
-     * Remove XP from user
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {number} xp - XP to remove
-     * @returns {Promise<void>}
+     * Remove XP
+     * @param {string} userId
+     * @param {string} guildId
+     * @param {number} xp
      */
     async removeXP(userId, guildId, xp) {
         try {
             await this._ensureLevelRecord(userId, guildId);
 
-            const levelData = await this.findOneBy({
-                guild_id: guildId,
-                user_id: userId
-            });
+            const beforeRows = await this.query(
+                `SELECT xp FROM user_levels WHERE user_id = ? AND guild_id = ?`,
+                [userId, guildId]
+            );
 
-            const currentXP = levelData.xp || 0;
-            const newXP = Math.max(0, currentXP - xp);
+            const oldXP = beforeRows?.[0]?.xp || 0;
+            const newXP = Math.max(0, oldXP - xp);
             const newLevel = this.calculateLevelFromXP(newXP);
-
             const now = Math.floor(Date.now() / 1000);
 
-            await this.updateBy(
-                { guild_id: guildId, user_id: userId },
-                {
-                    xp: newXP,
-                    level: newLevel,
-                    updated_at: now
-                }
+            await this.query(
+                `UPDATE user_levels
+                 SET xp = ?, level = ?, updated_at = ?
+                 WHERE user_id = ? AND guild_id = ?`,
+                [newXP, newLevel, now, userId, guildId]
             );
 
             this.log(`Removed ${xp} XP from user ${userId}`, 'info');
@@ -218,26 +203,22 @@ class LevelingModel extends Model {
     }
 
     /**
-     * Set user level
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {number} level - Level to set
-     * @returns {Promise<void>}
+     * Set level
+     * @param {string} userId
+     * @param {string} guildId
+     * @param {number} level
      */
     async setLevel(userId, guildId, level) {
         try {
             await this._ensureLevelRecord(userId, guildId);
-
             const xp = this.calculateXPForLevel(level);
             const now = Math.floor(Date.now() / 1000);
 
-            await this.updateBy(
-                { guild_id: guildId, user_id: userId },
-                {
-                    xp,
-                    level,
-                    updated_at: now
-                }
+            await this.query(
+                `UPDATE user_levels
+                 SET xp = ?, level = ?, updated_at = ?
+                 WHERE user_id = ? AND guild_id = ?`,
+                [xp, level, now, userId, guildId]
             );
 
             this.log(`Set level for user ${userId} to ${level}`, 'info');
@@ -248,24 +229,20 @@ class LevelingModel extends Model {
     }
 
     /**
-     * Reset user XP
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @returns {Promise<void>}
+     * Reset XP
+     * @param {string} userId
+     * @param {string} guildId
      */
     async resetXP(userId, guildId) {
         try {
             await this._ensureLevelRecord(userId, guildId);
-
             const now = Math.floor(Date.now() / 1000);
 
-            await this.updateBy(
-                { guild_id: guildId, user_id: userId },
-                {
-                    xp: 0,
-                    level: 1,
-                    updated_at: now
-                }
+            await this.query(
+                `UPDATE user_levels
+                 SET xp = 0, level = 0, updated_at = ?
+                 WHERE user_id = ? AND guild_id = ?`,
+                [now, userId, guildId]
             );
 
             this.log(`Reset XP for user ${userId}`, 'info');
@@ -277,71 +254,42 @@ class LevelingModel extends Model {
 
     /**
      * Add voice activity time
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {number} minutes - Minutes to add
-     * @returns {Promise<void>}
+     * @param {string} userId
+     * @param {string} guildId
+     * @param {number} minutes
      */
     async addVoiceTime(userId, guildId, minutes) {
-        try {
-            await this._ensureLevelRecord(userId, guildId);
-
-            const now = Math.floor(Date.now() / 1000);
-
-            await this.query(
-                `UPDATE ${this.tableName} 
-                 SET voice_minutes = voice_minutes + ?, updated_at = ? 
-                 WHERE guild_id = ? AND user_id = ?`,
-                [minutes, now, guildId, userId]
-            );
-
-            this.log(`Added ${minutes} voice minutes for user ${userId}`, 'info');
-        } catch (error) {
-            this.log(`Error adding voice time for user ${userId}: ${error.message}`, 'error');
-            throw error;
-        }
+        // Awards 5 XP per voice minute
+        await this.addXP(userId, guildId, minutes * 5);
     }
 
     /**
      * Get leaderboard
-     * @param {string} guildId - Guild ID
-     * @param {string} type - Leaderboard type ('xp', 'level', 'messages')
-     * @param {number} limit - Number of users to return
-     * @returns {Promise<Array>} Leaderboard data
+     * @param {string} guildId
+     * @param {string} type
+     * @param {number} limit
+     * @returns {Promise<Array>}
      */
     async getLeaderboard(guildId, type = 'xp', limit = 10) {
         try {
             let orderBy = 'xp DESC';
-            switch (type) {
-                case 'level':
-                    orderBy = 'level DESC, xp DESC';
-                    break;
-                case 'messages':
-                    orderBy = 'total_messages DESC';
-                    break;
-                case 'voice':
-                    orderBy = 'voice_minutes DESC';
-                    break;
-                default:
-                    orderBy = 'xp DESC';
-            }
+            if (type === 'level') orderBy = 'level DESC, xp DESC';
 
-            const results = await this.query(
-                `SELECT user_id, xp, level, total_messages, voice_minutes 
-                 FROM ${this.tableName} 
-                 WHERE guild_id = ? 
-                 ORDER BY ${orderBy} 
+            const rows = await this.query(
+                `SELECT user_id, xp, level, last_message_at
+                 FROM user_levels
+                 WHERE guild_id = ?
+                 ORDER BY ${orderBy}
                  LIMIT ?`,
                 [guildId, limit]
             );
 
-            return results.map((row, index) => ({
+            return rows.map((row, index) => ({
                 rank: index + 1,
                 userId: row.user_id,
                 xp: row.xp,
                 level: row.level,
-                totalMessages: row.total_messages,
-                voiceMinutes: row.voice_minutes
+                totalMessages: Math.floor(row.xp / 15),
             }));
         } catch (error) {
             this.log(`Error getting leaderboard: ${error.message}`, 'error');
@@ -351,23 +299,22 @@ class LevelingModel extends Model {
 
     /**
      * Get user rank in guild
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @returns {Promise<number>} User rank (1-based)
+     * @param {string} userId
+     * @param {string} guildId
+     * @returns {Promise<number>}
      */
     async getUserRank(userId, guildId) {
         try {
-            const result = await this.query(
-                `SELECT COUNT(*) + 1 as rank 
-                 FROM ${this.tableName} 
+            const rows = await this.query(
+                `SELECT COUNT(*) + 1 as rank
+                 FROM user_levels
                  WHERE guild_id = ? AND xp > (
-                     SELECT xp FROM ${this.tableName} 
-                     WHERE guild_id = ? AND user_id = ?
+                     SELECT COALESCE(xp, 0) FROM user_levels WHERE guild_id = ? AND user_id = ?
                  )`,
                 [guildId, guildId, userId]
             );
 
-            return result[0]?.rank || 0;
+            return rows?.[0]?.rank || 1;
         } catch (error) {
             this.log(`Error getting user rank: ${error.message}`, 'error');
             throw error;
@@ -376,21 +323,22 @@ class LevelingModel extends Model {
 
     /**
      * Calculate XP required for a level
-     * @param {number} level - Level
-     * @returns {number} XP required
+     * @param {number} level
+     * @returns {number}
      */
     calculateXPForLevel(level) {
-        // Formula: XP = 5 * (level^2) + 50 * level + 100
+        if (level <= 0) return 0;
         return 5 * (level ** 2) + 50 * level + 100;
     }
 
     /**
      * Calculate level from XP
-     * @param {number} xp - Total XP
-     * @returns {number} Level
+     * @param {number} xp
+     * @returns {number}
      */
     calculateLevelFromXP(xp) {
-        let level = 1;
+        if (xp <= 0) return 0;
+        let level = 0;
         while (xp >= this.calculateXPForLevel(level + 1)) {
             level++;
         }
@@ -398,26 +346,27 @@ class LevelingModel extends Model {
     }
 
     /**
-     * Ensure level record exists for user.
-     * Uses INSERT ... ON CONFLICT DO NOTHING to prevent TOCTOU race conditions.
+     * Ensure level record exists
      * @private
      */
     async _ensureLevelRecord(userId, guildId) {
-        try {
-            const now = Math.floor(Date.now() / 1000);
-            const recordId = `${guildId}-${userId}`;
+        const now = Math.floor(Date.now() / 1000);
 
-            await this.query(
-                `INSERT INTO ${this.tableName}
-                 (id, guild_id, user_id, xp, level, total_messages, voice_minutes, last_xp_at, created_at, updated_at)
-                 VALUES (?, ?, ?, 0, 1, 0, 0, NULL, ?, ?)
-                 ON CONFLICT(id) DO NOTHING`,
-                [recordId, guildId, userId, now, now]
-            );
-        } catch (error) {
-            this.log(`Error ensuring level record: ${error.message}`, 'error');
-            throw error;
-        }
+        // Ensure user profile exists for FK
+        await this.query(
+            `INSERT INTO user_profiles (user_id, created_at, updated_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(user_id) DO NOTHING`,
+            [userId, now, now]
+        );
+
+        // Ensure user_levels row exists
+        await this.query(
+            `INSERT INTO user_levels (user_id, guild_id, xp, level, created_at, updated_at)
+             VALUES (?, ?, 0, 0, ?, ?)
+             ON CONFLICT(user_id, guild_id) DO NOTHING`,
+            [userId, guildId, now, now]
+        );
     }
 }
 

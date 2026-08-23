@@ -56,18 +56,24 @@ class BaseInteraction {
      * @returns {Promise<void>}
      */
     async handleError(interaction, error) {
+        const isUnknownInteraction = error.code === 10062 || error.message?.includes('Unknown interaction') || error.message?.includes('already been acknowledged');
+
         this.log(
             `Error handling interaction: ${error.message}`,
-            'error',
+            isUnknownInteraction ? 'debug' : 'error',
             {
                 customId: this.customId,
                 type: this.type,
                 user: interaction.user?.tag,
                 guild: interaction.guild?.name,
                 error: error.message,
-                stack: error.stack,
             }
         );
+
+        if (isUnknownInteraction) {
+            // Cannot reply to an expired or unknown interaction token
+            return;
+        }
 
         // Send user-friendly error message
         const errorMessage = '❌ An error occurred while processing your interaction. Please try again.';
@@ -76,14 +82,16 @@ class BaseInteraction {
             if (interaction.replied || interaction.deferred) {
                 await interaction.editReply({ content: errorMessage });
             } else {
-                await interaction.reply({ content: errorMessage });
+                await interaction.reply({ content: errorMessage, ephemeral: true });
             }
         } catch (replyError) {
-            this.log(
-                `Failed to send error message: ${replyError.message}`,
-                'error',
-                { error: replyError.message }
-            );
+            if (replyError.code !== 10062 && !replyError.message?.includes('Unknown interaction')) {
+                this.log(
+                    `Failed to send error message: ${replyError.message}`,
+                    'warn',
+                    { error: replyError.message }
+                );
+            }
         }
     }
 
@@ -125,7 +133,9 @@ class BaseInteraction {
                 await interaction.reply({ content: errorMessage, ephemeral });
             }
         } catch (error) {
-            this.log(`Failed to send error message: ${error.message}`, 'error');
+            if (error.code !== 10062 && !error.message?.includes('Unknown interaction')) {
+                this.log(`Failed to send error message: ${error.message}`, 'warn');
+            }
         }
     }
 

@@ -1,33 +1,25 @@
+'use strict';
+
 /**
  * InfractionService
  * 
  * Business logic for managing infractions (warnings, bans, kicks, etc.)
- * Handles CRUD operations and infraction queries with filtering.
+ * Synchronized with consolidated schema:
+ * infractions (id, user_id, guild_id, moderator_id, type, reason, active, expires_at, metadata_json, created_at)
  */
 
 const BaseService = require('../../../../system/core/BaseService');
+const { randomUUID } = require('crypto');
 
 class InfractionService extends BaseService {
-    /**
-     * Create a new InfractionService instance
-     * @param {Object} client - Discord client instance
-     * @param {Object} options - Service configuration options
-     */
     constructor(client, options = {}) {
         super(client, options);
-
-        // Will be set during initialization
         this.moderationModel = null;
     }
 
-    /**
-     * Initialize service with dependencies
-     * @returns {Promise<void>}
-     */
     async initialize() {
         await super.initialize();
 
-        // Get model from loader
         const loader = this.client.loader;
         if (loader) {
             this.moderationModel = loader.model('ModerationModel');
@@ -38,37 +30,36 @@ class InfractionService extends BaseService {
 
     /**
      * Create a new infraction
-     * @param {Object} data - Infraction data
-     * @param {string} data.guildId - Guild ID
-     * @param {string} data.userId - User ID
-     * @param {string} data.moderatorId - Moderator user ID
-     * @param {string} data.type - Infraction type (warning, kick, ban, timeout, mute, etc.)
-     * @param {string} data.reason - Reason for infraction
-     * @param {number} data.duration - Duration in minutes (for timeouts)
-     * @param {number} data.expiresAt - Expiration timestamp (for temporary infractions)
-     * @returns {Promise<Object>} Created infraction object
      */
     async createInfraction(data) {
         try {
             this.validateRequired(data, ['guildId', 'userId', 'moderatorId', 'type', 'reason']);
 
-            const infractionId = `${data.type}-${Date.now()}-${data.userId}`;
-            const timestamp = Date.now();
-            const expiresAt = data.expiresAt || null;
+            const infractionId = randomUUID();
+            const now = Math.floor(Date.now() / 1000);
+            const expiresAt = data.expiresAt ? Math.floor(data.expiresAt / 1000) : (data.expiresIn ? now + data.expiresIn : null);
+
+            // Ensure user profile exists for FK
+            await this.query(
+                `INSERT INTO user_profiles (user_id, created_at, updated_at)
+                 VALUES (?, ?, ?)
+                 ON CONFLICT(user_id) DO NOTHING`,
+                [data.userId, now, now]
+            );
 
             await this.query(
-                `INSERT INTO infractions (id, guild_id, user_id, moderator_id, type, reason, timestamp, duration, expires_at) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                `INSERT INTO infractions (id, user_id, guild_id, moderator_id, type, reason, active, expires_at, metadata_json, created_at) 
+                 VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
                 [
                     infractionId,
-                    data.guildId,
                     data.userId,
+                    data.guildId,
                     data.moderatorId,
                     data.type,
                     data.reason,
-                    timestamp,
-                    data.duration || null,
-                    expiresAt
+                    expiresAt,
+                    JSON.stringify(data.metadata || {}),
+                    now
                 ]
             );
 
@@ -81,8 +72,7 @@ class InfractionService extends BaseService {
                 moderatorId: data.moderatorId,
                 type: data.type,
                 reason: data.reason,
-                timestamp,
-                duration: data.duration || null,
+                timestamp: now * 1000,
                 expiresAt
             };
         } catch (error) {
@@ -93,8 +83,6 @@ class InfractionService extends BaseService {
 
     /**
      * Get infraction by ID
-     * @param {string} infractionId - Infraction ID
-     * @returns {Promise<Object|null>} Infraction object or null
      */
     async getInfraction(infractionId) {
         try {
@@ -114,14 +102,6 @@ class InfractionService extends BaseService {
 
     /**
      * Get infractions with filtering
-     * @param {Object} filters - Filter options
-     * @param {string} filters.guildId - Guild ID (required)
-     * @param {string} filters.userId - User ID (optional)
-     * @param {string} filters.moderatorId - Moderator ID (optional)
-     * @param {string} filters.type - Infraction type (optional)
-     * @param {number} filters.limit - Limit results (default: 50)
-     * @param {number} filters.offset - Offset for pagination (default: 0)
-     * @returns {Promise<Array>} Array of infractions
      */
     async getInfractions(filters = {}) {
         try {
@@ -147,11 +127,10 @@ class InfractionService extends BaseService {
                 params.push(type);
             }
 
-            sql += ` ORDER BY timestamp DESC LIMIT ? OFFSET ?`;
+            sql += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
             params.push(limit, offset);
 
             const results = await this.query(sql, params);
-
             return results || [];
         } catch (error) {
             this.handleError(error, 'getInfractions', { filters });
@@ -160,17 +139,13 @@ class InfractionService extends BaseService {
     }
 
     /**
-     * Get infraction count for a user
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @param {string} type - Infraction type (optional, filter by type)
-     * @returns {Promise<number>} Count of infractions
+     * Get infraction count for user
      */
     async getInfractionCount(userId, guildId, type = null) {
         try {
             this.validateRequired({ userId, guildId }, ['userId', 'guildId']);
 
-            let sql = `SELECT COUNT(*) as count FROM infractions WHERE user_id = ? AND guild_id = ?`;
+            let sql = `SELECT COUNT(*) as count FROM infractions WHERE user_id = ? AND guild_id = ? AND active = 1`;
             const params = [userId, guildId];
 
             if (type) {
@@ -179,8 +154,7 @@ class InfractionService extends BaseService {
             }
 
             const results = await this.query(sql, params);
-
-            return results && results.length > 0 ? results[0].count : 0;
+            return results?.[0]?.count || 0;
         } catch (error) {
             this.handleError(error, 'getInfractionCount', { userId, guildId, type });
             return 0;
@@ -188,39 +162,27 @@ class InfractionService extends BaseService {
     }
 
     /**
-     * Update an infraction
-     * @param {string} infractionId - Infraction ID
-     * @param {Object} updates - Fields to update
-     * @returns {Promise<boolean>} True if updated successfully
+     * Update infraction
      */
     async updateInfraction(infractionId, updates) {
         try {
             this.validateRequired({ infractionId }, ['infractionId']);
 
-            const allowedFields = ['reason', 'duration', 'expires_at'];
+            const allowed = ['reason', 'expires_at', 'active'];
             const fields = [];
             const params = [];
 
-            for (const [key, value] of Object.entries(updates)) {
-                if (allowedFields.includes(key)) {
-                    fields.push(`${key} = ?`);
-                    params.push(value);
+            for (const [k, v] of Object.entries(updates)) {
+                if (allowed.includes(k)) {
+                    fields.push(`${k} = ?`);
+                    params.push(v);
                 }
             }
 
-            if (fields.length === 0) {
-                return false;
-            }
-
+            if (fields.length === 0) return false;
             params.push(infractionId);
 
-            await this.query(
-                `UPDATE infractions SET ${fields.join(', ')} WHERE id = ?`,
-                params
-            );
-
-            this.log(`Updated infraction ${infractionId}`, 'info');
-
+            await this.query(`UPDATE infractions SET ${fields.join(', ')} WHERE id = ?`, params);
             return true;
         } catch (error) {
             this.handleError(error, 'updateInfraction', { infractionId, updates });
@@ -229,21 +191,12 @@ class InfractionService extends BaseService {
     }
 
     /**
-     * Delete an infraction
-     * @param {string} infractionId - Infraction ID
-     * @returns {Promise<boolean>} True if deleted successfully
+     * Delete infraction
      */
     async deleteInfraction(infractionId) {
         try {
             this.validateRequired({ infractionId }, ['infractionId']);
-
-            await this.query(
-                `DELETE FROM infractions WHERE id = ?`,
-                [infractionId]
-            );
-
-            this.log(`Deleted infraction ${infractionId}`, 'info');
-
+            await this.query(`DELETE FROM infractions WHERE id = ?`, [infractionId]);
             return true;
         } catch (error) {
             this.handleError(error, 'deleteInfraction', { infractionId });
@@ -252,25 +205,16 @@ class InfractionService extends BaseService {
     }
 
     /**
-     * Clear all infractions for a user
-     * @param {string} userId - User ID
-     * @param {string} guildId - Guild ID
-     * @returns {Promise<number>} Number of infractions cleared
+     * Clear infractions for user
      */
     async clearUserInfractions(userId, guildId) {
         try {
             this.validateRequired({ userId, guildId }, ['userId', 'guildId']);
-
             const result = await this.query(
-                `DELETE FROM infractions WHERE user_id = ? AND guild_id = ?`,
+                `UPDATE infractions SET active = 0 WHERE user_id = ? AND guild_id = ?`,
                 [userId, guildId]
             );
-
-            const count = result ? result.changes || 0 : 0;
-
-            this.log(`Cleared ${count} infractions for user ${userId} in guild ${guildId}`, 'info');
-
-            return count;
+            return result?.changes || 0;
         } catch (error) {
             this.handleError(error, 'clearUserInfractions', { userId, guildId });
             return 0;
@@ -278,14 +222,12 @@ class InfractionService extends BaseService {
     }
 
     /**
-     * Check and process expired infractions
-     * @param {string} guildId - Guild ID (optional, check all guilds if not provided)
-     * @returns {Promise<Array>} Array of expired infractions
+     * Check expired infractions
      */
     async checkExpiredInfractions(guildId = null) {
         try {
-            const now = Date.now();
-            let sql = `SELECT * FROM infractions WHERE expires_at IS NOT NULL AND expires_at <= ?`;
+            const now = Math.floor(Date.now() / 1000);
+            let sql = `SELECT * FROM infractions WHERE active = 1 AND expires_at IS NOT NULL AND expires_at <= ?`;
             const params = [now];
 
             if (guildId) {
@@ -293,20 +235,15 @@ class InfractionService extends BaseService {
                 params.push(guildId);
             }
 
-            const expiredInfractions = await this.query(sql, params);
-
-            if (!expiredInfractions || expiredInfractions.length === 0) {
-                return [];
+            const expired = await this.query(sql, params);
+            if (expired && expired.length > 0) {
+                await this.query(
+                    `UPDATE infractions SET active = 0 WHERE active = 1 AND expires_at IS NOT NULL AND expires_at <= ?`,
+                    [now]
+                );
             }
 
-            this.log(`Found ${expiredInfractions.length} expired infractions`, 'info');
-
-            // Delete expired infractions
-            for (const infraction of expiredInfractions) {
-                await this.deleteInfraction(infraction.id);
-            }
-
-            return expiredInfractions;
+            return expired || [];
         } catch (error) {
             this.handleError(error, 'checkExpiredInfractions', { guildId });
             return [];
@@ -314,9 +251,7 @@ class InfractionService extends BaseService {
     }
 
     /**
-     * Get infraction statistics for a guild
-     * @param {string} guildId - Guild ID
-     * @returns {Promise<Object>} Statistics object
+     * Get infraction statistics
      */
     async getInfractionStats(guildId) {
         try {
@@ -327,11 +262,7 @@ class InfractionService extends BaseService {
                 [guildId]
             );
 
-            const stats = {
-                total: 0,
-                byType: {}
-            };
-
+            const stats = { total: 0, byType: {} };
             if (results) {
                 for (const row of results) {
                     stats.byType[row.type] = row.count;
@@ -343,28 +274,6 @@ class InfractionService extends BaseService {
         } catch (error) {
             this.handleError(error, 'getInfractionStats', { guildId });
             return { total: 0, byType: {} };
-        }
-    }
-
-    /**
-     * Get recent infractions for a guild
-     * @param {string} guildId - Guild ID
-     * @param {number} limit - Number of recent infractions to fetch (default: 10)
-     * @returns {Promise<Array>} Array of recent infractions
-     */
-    async getRecentInfractions(guildId, limit = 10) {
-        try {
-            this.validateRequired({ guildId }, ['guildId']);
-
-            const results = await this.query(
-                `SELECT * FROM infractions WHERE guild_id = ? ORDER BY timestamp DESC LIMIT ?`,
-                [guildId, limit]
-            );
-
-            return results || [];
-        } catch (error) {
-            this.handleError(error, 'getRecentInfractions', { guildId, limit });
-            return [];
         }
     }
 }

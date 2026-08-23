@@ -1,8 +1,10 @@
+'use strict';
+
 /**
  * TransactionManager Class
  * 
- * Manages database transactions dengan proper nesting support menggunakan savepoints.
- * Provides deadlock detection, retry logic, dan transaction timeout handling.
+ * Manages database transactions using LibSQL's native interactive transaction support.
+ * Provides safe nesting, automatic commit/rollback, and deadlock retry handling.
  */
 
 const { DatabaseError } = require('../core/Errors');
@@ -21,13 +23,15 @@ class TransactionManager {
             initialDelay: options.initialDelay || 100,
             maxDelay: options.maxDelay || 5000,
             backoffMultiplier: options.backoffMultiplier || 2,
-            defaultTimeout: options.defaultTimeout || 30000, // 30 seconds
+            defaultTimeout: options.defaultTimeout || 30000,
             deadlockRetryDelay: options.deadlockRetryDelay || 50,
             ...options
         };
 
         this.transactionDepth = 0;
-        this.transactionStack = [];
+        this.activeTx = null;
+        this.activeTxWrapper = null;
+
         this.stats = {
             transactionsStarted: 0,
             transactionsCommitted: 0,
@@ -41,164 +45,90 @@ class TransactionManager {
 
     /**
      * Get current transaction depth
-     * @returns {number} Transaction depth
+     * @returns {number}
      */
     getDepth() {
         return this.transactionDepth;
     }
 
     /**
-     * Check if in transaction
-     * @returns {boolean} True if in transaction
+     * Check if currently in a transaction
+     * @returns {boolean}
      */
     isInTransaction() {
-        return this.transactionDepth > 0;
+        return this.transactionDepth > 0 && this.activeTx !== null;
     }
 
     /**
-     * Begin a transaction or savepoint
-     * @param {Object} options - Transaction options
-     * @returns {Promise<void>}
-     */
-    async begin(options = {}) {
-        try {
-            const startTime = Date.now();
-            const timeout = options.timeout || this.options.defaultTimeout;
-
-            // Support nested transactions with savepoints
-            if (this.transactionDepth > 0) {
-                await this.db.query(`SAVEPOINT sp_${this.transactionDepth}`);
-                this.transactionStack.push({
-                    type: 'savepoint',
-                    name: `sp_${this.transactionDepth}`,
-                    startTime,
-                    timeout
-                });
-            } else {
-                await this.db.query('BEGIN TRANSACTION');
-                this.transactionStack.push({
-                    type: 'transaction',
-                    startTime,
-                    timeout
-                });
-            }
-
-            this.transactionDepth++;
-            this.stats.transactionsStarted++;
-        } catch (error) {
-            throw new DatabaseError('Failed to begin transaction', {
-                originalError: error.message,
-                transactionDepth: this.transactionDepth
-            });
-        }
-    }
-
-    /**
-     * Commit a transaction or release savepoint
-     * @returns {Promise<void>}
-     */
-    async commit() {
-        if (this.transactionDepth === 0) {
-            throw new DatabaseError('No active transaction to commit', {
-                transactionDepth: this.transactionDepth
-            });
-        }
-
-        const transaction = this.transactionStack[this.transactionStack.length - 1];
-
-        // Check for timeout before committing
-        if (transaction) {
-            const elapsed = Date.now() - transaction.startTime;
-            if (elapsed > transaction.timeout) {
-                this.stats.timeouts++;
-                // Rollback on timeout
-                await this.rollback();
-                throw new DatabaseError('Transaction timeout', {
-                    elapsed,
-                    timeout: transaction.timeout
-                });
-            }
-        }
-
-        try {
-            this.transactionDepth--;
-            this.transactionStack.pop();
-
-            // Release savepoint for nested transactions, commit for top-level
-            if (this.transactionDepth > 0) {
-                await this.db.query(`RELEASE SAVEPOINT sp_${this.transactionDepth}`);
-            } else {
-                await this.db.query('COMMIT');
-            }
-
-            this.stats.transactionsCommitted++;
-        } catch (error) {
-            throw new DatabaseError('Failed to commit transaction', {
-                originalError: error.message,
-                transactionDepth: this.transactionDepth
-            });
-        }
-    }
-
-    /**
-     * Rollback a transaction or savepoint
-     * @returns {Promise<void>}
-     */
-    async rollback() {
-        if (this.transactionDepth === 0) {
-            throw new DatabaseError('No active transaction to rollback', {
-                transactionDepth: this.transactionDepth
-            });
-        }
-
-        try {
-            this.transactionDepth--;
-            this.transactionStack.pop();
-
-            // Rollback to savepoint for nested transactions, rollback all for top-level
-            if (this.transactionDepth > 0) {
-                await this.db.query(`ROLLBACK TO SAVEPOINT sp_${this.transactionDepth}`);
-            } else {
-                await this.db.query('ROLLBACK');
-            }
-
-            this.stats.transactionsRolledBack++;
-        } catch (error) {
-            // Reset transaction depth on rollback error to prevent inconsistency
-            this.transactionDepth = 0;
-            this.transactionStack = [];
-            this.stats.depthInconsistencies++;
-
-            throw new DatabaseError('Failed to rollback transaction', {
-                originalError: error.message,
-                transactionDepth: this.transactionDepth
-            });
-        }
-    }
-
-    /**
-     * Execute function in transaction with automatic commit/rollback
-     * @param {Function} fn - Function to execute
-     * @param {Object} options - Transaction options
-     * @returns {Promise<any>} Function result
+     * Execute function in a managed transaction
+     * @param {Function} fn - Async function accepting (txWrapper)
+     * @param {Object} [options]
+     * @returns {Promise<any>}
      */
     async execute(fn, options = {}) {
-        await this.begin(options);
+        // If already in a transaction, reuse the active transaction wrapper
+        if (this.isInTransaction()) {
+            this.transactionDepth++;
+            try {
+                return await fn(this.activeTxWrapper);
+            } finally {
+                this.transactionDepth--;
+            }
+        }
+
+        if (!this.db || !this.db.db) {
+            throw new DatabaseError('Database client not ready for transaction');
+        }
+
+        // Open native LibSQL transaction
+        const tx = await this.db.db.transaction('write');
+        this.activeTx = tx;
+        this.transactionDepth = 1;
+        this.stats.transactionsStarted++;
+
+        const txWrapper = {
+            query: async (sql, params = []) => {
+                const res = await tx.execute({ sql, args: params });
+                return res.rows ? Array.from(res.rows) : [];
+            },
+            queryOne: async (sql, params = []) => {
+                const res = await tx.execute({ sql, args: params });
+                return (res.rows && res.rows.length > 0) ? res.rows[0] : null;
+            },
+            execute: async (sql, params = []) => {
+                return await tx.execute({ sql, args: params });
+            },
+            transaction: async (nestedFn) => {
+                return await this.execute(nestedFn);
+            }
+        };
+
+        this.activeTxWrapper = txWrapper;
 
         try {
-            const result = await fn(this);
-            await this.commit();
+            const result = await fn(txWrapper);
+            await tx.commit();
+            this.stats.transactionsCommitted++;
             return result;
         } catch (error) {
-            await this.rollback();
+            try {
+                await tx.rollback();
+            } catch (rollbackErr) {
+                // Ignore rollback errors if already aborted
+            }
+            this.stats.transactionsRolledBack++;
             throw error;
+        } finally {
+            this.activeTx = null;
+            this.activeTxWrapper = null;
+            this.transactionDepth = 0;
         }
     }
 
     /**
      * Check if error is a deadlock error
-     * @param {Error} error - Error to check
-     * @returns {boolean} True if deadlock
+     * @param {Error} error
+     * @returns {boolean}
      * @private
      */
     _isDeadlockError(error) {
@@ -210,9 +140,9 @@ class TransactionManager {
 
     /**
      * Handle deadlock with retry
-     * @param {Function} fn - Function to retry
-     * @param {Object} options - Retry options
-     * @returns {Promise<any>} Function result
+     * @param {Function} fn
+     * @param {Object} options
+     * @returns {Promise<any>}
      */
     async withDeadlockRetry(fn, options = {}) {
         const maxRetries = options.maxRetries || this.options.maxRetries;
@@ -225,9 +155,9 @@ class TransactionManager {
                 } catch (error) {
                     if (this._isDeadlockError(error)) {
                         this.stats.deadlocksDetected++;
-                        // Reset transaction depth on deadlock
                         this.transactionDepth = 0;
-                        this.transactionStack = [];
+                        this.activeTx = null;
+                        this.activeTxWrapper = null;
                     }
                     throw error;
                 }
@@ -240,7 +170,7 @@ class TransactionManager {
                 shouldRetry: (error) => {
                     return this._isDeadlockError(error) || shouldRetryError(error);
                 },
-                onRetry: (error, attempt) => {
+                onRetry: () => {
                     this.stats.retriesPerformed++;
                 }
             }
@@ -249,9 +179,9 @@ class TransactionManager {
 
     /**
      * Execute function with transaction and deadlock retry
-     * @param {Function} fn - Function to execute
-     * @param {Object} options - Options
-     * @returns {Promise<any>} Function result
+     * @param {Function} fn
+     * @param {Object} options
+     * @returns {Promise<any>}
      */
     async executeWithRetry(fn, options = {}) {
         return await this.withDeadlockRetry(
@@ -263,54 +193,23 @@ class TransactionManager {
     }
 
     /**
-     * Detect and recover from transaction depth inconsistency
-     * @returns {Promise<void>}
+     * Reset depth and state
      */
     async recoverDepth() {
-        try {
-            // Try to rollback any pending transactions
-            while (this.transactionDepth > 0) {
-                try {
-                    await this.rollback();
-                } catch (error) {
-                    // If rollback fails, force reset
-                    break;
-                }
-            }
-
-            // Force reset depth
-            this.transactionDepth = 0;
-            this.transactionStack = [];
-            this.stats.depthInconsistencies++;
-        } catch (error) {
-            // Last resort: force reset
-            this.transactionDepth = 0;
-            this.transactionStack = [];
-            throw new DatabaseError('Failed to recover transaction depth', {
-                originalError: error.message
-            });
-        }
-    }
-
-    /**
-     * Validate transaction depth consistency
-     * @returns {boolean} True if consistent
-     */
-    validateDepth() {
-        return this.transactionDepth === this.transactionStack.length &&
-            this.transactionDepth >= 0;
+        this.transactionDepth = 0;
+        this.activeTx = null;
+        this.activeTxWrapper = null;
     }
 
     /**
      * Get transaction statistics
-     * @returns {Object} Statistics
+     * @returns {Object}
      */
     getStats() {
         return {
             ...this.stats,
             currentDepth: this.transactionDepth,
-            stackSize: this.transactionStack.length,
-            isConsistent: this.validateDepth()
+            isInTransaction: this.isInTransaction()
         };
     }
 
@@ -327,25 +226,6 @@ class TransactionManager {
             timeouts: 0,
             depthInconsistencies: 0
         };
-    }
-
-    /**
-     * Get current transaction info
-     * @returns {Object|null} Transaction info
-     */
-    getCurrentTransaction() {
-        if (this.transactionStack.length === 0) {
-            return null;
-        }
-        return this.transactionStack[this.transactionStack.length - 1];
-    }
-
-    /**
-     * Get all active transactions
-     * @returns {Array} Transaction stack
-     */
-    getTransactionStack() {
-        return [...this.transactionStack];
     }
 }
 

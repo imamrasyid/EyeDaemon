@@ -2,12 +2,12 @@
  * EconomyController
  * 
  * Handles all economy-related commands
- * Manages currency, games, shop, and transactions
+ * Manages currency, games, shop, and transactions with modern ResponseHelper UI.
  */
 
 const Controller = require('../../system/core/Controller');
-const { EmbedBuilder } = require('discord.js');
-const { replyEphemeral, MessageFlags } = require('../../system/helpers/InteractionHelper');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const ResponseHelper = require('../../system/helpers/ResponseHelper');
 
 class EconomyController extends Controller {
     /**
@@ -17,7 +17,7 @@ class EconomyController extends Controller {
     constructor(client) {
         super(client);
 
-        // Load models (kept for backward compatibility)
+        // Load models (for fallback)
         this.economyModel = this.load.model('EconomyModel');
 
         // Get services from economy module
@@ -30,19 +30,49 @@ class EconomyController extends Controller {
     }
 
     /**
+     * Lazy load economy service if not already loaded
+     */
+    getEconomyService() {
+        if (this.economyService) return this.economyService;
+        const mod = this.client.modules.get('economy');
+        if (mod) this.economyService = mod.getService('EconomyService');
+        return this.economyService;
+    }
+
+    /**
+     * Lazy load game service
+     */
+    getGameService() {
+        if (this.gameService) return this.gameService;
+        const mod = this.client.modules.get('economy');
+        if (mod) this.gameService = mod.getService('GameService');
+        return this.gameService;
+    }
+
+    /**
+     * Lazy load shop service
+     */
+    getShopService() {
+        if (this.shopService) return this.shopService;
+        const mod = this.client.modules.get('economy');
+        if (mod) this.shopService = mod.getService('ShopService');
+        return this.shopService;
+    }
+
+    /**
      * Balance command handler
      * Displays user's balance
-     * @param {Object} interaction - Discord interaction
      */
     async balance(interaction) {
         try {
             const user = interaction.options.getUser('user') || interaction.user;
             const guildId = interaction.guild.id;
 
-            // Use service if available, fallback to model
+            const service = this.getEconomyService();
             let balance;
-            if (this.economyService) {
-                balance = await this.economyService.getBalance(user.id, guildId);
+
+            if (service) {
+                balance = await service.getBalance(user.id, guildId);
             } else {
                 const modelBalance = await this.economyModel.getUserBalance(user.id, guildId);
                 balance = {
@@ -52,55 +82,60 @@ class EconomyController extends Controller {
                 };
             }
 
-            const embed = new EmbedBuilder()
-                .setColor(0xf1c40f)
-                .setTitle('💰 Balance')
-                .setDescription(`Balance for **${user.tag}**`)
-                .addFields(
-                    { name: 'Wallet', value: `${balance.wallet} coins`, inline: true },
-                    { name: 'Bank', value: `${balance.bank} coins`, inline: true },
-                    { name: 'Total', value: `${balance.total} coins`, inline: true }
-                )
-                .setThumbnail(user.displayAvatarURL())
-                .setTimestamp();
-
-            await interaction.reply({ embeds: [embed] });
+            const embed = ResponseHelper.balanceCard(user, balance);
+            await ResponseHelper.send(interaction, embed);
         } catch (error) {
             this.log(`Error in balance command: ${error.message}`, 'error');
-            await this.sendError(interaction, 'Failed to fetch balance');
+            await this.sendError(interaction, 'Failed to fetch balance profile');
         }
     }
 
     /**
      * Daily command handler
      * Claims daily reward
-     * @param {Object} interaction - Discord interaction
      */
     async daily(interaction) {
         try {
             const userId = interaction.user.id;
             const guildId = interaction.guild.id;
+            const service = this.getEconomyService();
 
-            const result = await this.economyModel.claimDaily(userId, guildId);
-
-            if (!result.success) {
-                const timeLeft = this.formatTime(result.timeLeft);
-                await replyEphemeral(interaction, `❌ You already claimed your daily reward! Come back in **${timeLeft}**`);
+            if (!service) {
+                await this.sendError(interaction, 'Economy service is currently unavailable');
                 return;
             }
 
-            const embed = new EmbedBuilder()
-                .setColor(0x2ecc71)
-                .setTitle('🎁 Daily Reward')
-                .setDescription(`You claimed your daily reward of **${result.amount} coins**!`)
-                .addFields(
-                    { name: 'New Balance', value: `${result.newBalance} coins`, inline: true },
-                    { name: 'Streak', value: `${result.streak} day${result.streak !== 1 ? 's' : ''}`, inline: true }
-                )
-                .setTimestamp();
+            const result = await service.claimDaily(userId, guildId);
 
-            await interaction.reply({ embeds: [embed] });
-            this.log(`User ${userId} claimed daily reward`, 'info');
+            if (!result.success) {
+                const timeLeftStr = result.timeLeft
+                    ? ResponseHelper.formatDuration(Math.ceil(result.timeLeft / 1000))
+                    : 'a few hours';
+
+                const embed = ResponseHelper.warning(
+                    'Daily Reward on Cooldown',
+                    `You have already claimed your daily reward today!\n\n**Next Claim Available In:** \`${timeLeftStr}\` ⏳`
+                );
+                await ResponseHelper.send(interaction, embed);
+                return;
+            }
+
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.SUCCESS,
+                title: '🎁 Daily Reward Claimed!',
+                thumbnail: 'https://cdn.discordapp.com/emojis/849313626159677461.webp',
+                description: [
+                    `Congratulations **${interaction.user.username}**! You claimed your daily reward.`,
+                    '',
+                    `**Reward Amount:** ${ResponseHelper.formatMoney(result.amount)}`,
+                    `**Daily Streak:** \`🔥 ${result.streak || 1} Days\``,
+                    `**New Wallet Balance:** ${ResponseHelper.formatMoney(result.newBalance)}`,
+                    '',
+                    ResponseHelper.subtext('Come back every 24 hours to keep your streak bonus alive!')
+                ].join('\n'),
+            });
+
+            await ResponseHelper.send(interaction, embed);
         } catch (error) {
             this.log(`Error in daily command: ${error.message}`, 'error');
             await this.sendError(interaction, 'Failed to claim daily reward');
@@ -109,219 +144,243 @@ class EconomyController extends Controller {
 
     /**
      * Work command handler
-     * Earns money from working
-     * @param {Object} interaction - Discord interaction
+     * Earns money by working
      */
     async work(interaction) {
         try {
             const userId = interaction.user.id;
             const guildId = interaction.guild.id;
+            const service = this.getEconomyService();
 
-            const result = await this.economyModel.work(userId, guildId);
-
-            if (!result.success) {
-                const timeLeft = this.formatTime(result.timeLeft);
-                await replyEphemeral(interaction, `❌ You're tired! Rest for **${timeLeft}** before working again`);
+            if (!service) {
+                await this.sendError(interaction, 'Economy service is currently unavailable');
                 return;
             }
 
-            const embed = new EmbedBuilder()
-                .setColor(0x3498db)
-                .setTitle('💼 Work')
-                .setDescription(`${result.message}\n\nYou earned **${result.amount} coins**!`)
-                .addFields(
-                    { name: 'New Balance', value: `${result.newBalance} coins`, inline: true }
-                )
-                .setTimestamp();
+            const result = await service.work(userId, guildId);
 
-            await interaction.reply({ embeds: [embed] });
-            this.log(`User ${userId} worked and earned ${result.amount} coins`, 'info');
+            if (!result.success) {
+                const timeLeftStr = result.timeLeft
+                    ? ResponseHelper.formatDuration(Math.ceil(result.timeLeft / 1000))
+                    : 'a few minutes';
+
+                const embed = ResponseHelper.warning(
+                    'Work Shift Cooldown',
+                    `You are tired from your last shift! Take a rest before working again.\n\n**Next Shift Available In:** \`${timeLeftStr}\` ⏱️`
+                );
+                await ResponseHelper.send(interaction, embed);
+                return;
+            }
+
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.ECONOMY,
+                title: '💼 Shift Completed!',
+                description: [
+                    `**${interaction.user.username}**, you worked as a **${result.job || 'Freelancer'}**!`,
+                    '',
+                    `**Earnings:** ${ResponseHelper.formatMoney(result.amount)}`,
+                    `**New Balance:** ${ResponseHelper.formatMoney(result.newBalance)}`,
+                ].join('\n'),
+            });
+
+            await ResponseHelper.send(interaction, embed);
         } catch (error) {
             this.log(`Error in work command: ${error.message}`, 'error');
-            await this.sendError(interaction, 'Failed to work');
+            await this.sendError(interaction, 'Failed to complete work shift');
         }
     }
 
     /**
      * Transfer command handler
      * Transfers money to another user
-     * @param {Object} interaction - Discord interaction
      */
     async transfer(interaction) {
         try {
-            const userId = interaction.user.id;
-            const targetUser = interaction.options.getUser('user');
+            const recipient = interaction.options.getUser('user');
             const amount = interaction.options.getInteger('amount');
+            const senderId = interaction.user.id;
             const guildId = interaction.guild.id;
 
-            if (targetUser.id === userId) {
-                await replyEphemeral(interaction, '❌ You cannot transfer money to yourself');
+            if (recipient.id === senderId) {
+                await this.sendError(interaction, 'You cannot transfer coins to yourself!');
                 return;
             }
 
-            if (targetUser.bot) {
-                await replyEphemeral(interaction, '❌ You cannot transfer money to bots');
+            if (recipient.bot) {
+                await this.sendError(interaction, 'You cannot transfer coins to Discord bots!');
                 return;
             }
 
-            // Use service if available, fallback to model
-            let result;
-            if (this.economyService) {
-                result = await this.economyService.transfer(userId, targetUser.id, guildId, amount);
-            } else {
-                result = await this.economyModel.transfer(userId, targetUser.id, guildId, amount);
+            if (amount <= 0) {
+                await this.sendError(interaction, 'Transfer amount must be greater than 0!');
+                return;
             }
+
+            const service = this.getEconomyService();
+            if (!service) {
+                await this.sendError(interaction, 'Economy service is currently unavailable');
+                return;
+            }
+
+            const result = await service.transfer(senderId, recipient.id, guildId, amount);
 
             if (!result.success) {
-                await replyEphemeral(interaction, `❌ ${result.message}`);
+                await this.sendError(interaction, result.message || 'Transfer failed');
                 return;
             }
 
-            const embed = new EmbedBuilder()
-                .setColor(0x2ecc71)
-                .setTitle('💸 Transfer')
-                .setDescription(`Successfully transferred **${amount} coins** to ${targetUser}`)
-                .addFields(
-                    { name: 'Your New Balance', value: `${result.newBalance} coins`, inline: true }
-                )
-                .setTimestamp();
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.SUCCESS,
+                title: '💸 Wire Transfer Successful',
+                fields: [
+                    { name: 'Sender', value: `${interaction.user} (\`${interaction.user.username}\`)`, inline: true },
+                    { name: 'Recipient', value: `${recipient} (\`${recipient.username}\`)`, inline: true },
+                    { name: 'Amount Transferred', value: ResponseHelper.formatMoney(amount), inline: true },
+                    { name: 'Transaction Tax (5%)', value: ResponseHelper.formatMoney(result.tax || 0), inline: true },
+                    { name: 'Your Remaining Balance', value: ResponseHelper.formatMoney(result.senderBalance), inline: true },
+                ],
+                footerText: 'EyeDaemon Bank Transfer • Instant Settlement'
+            });
 
-            await interaction.reply({ embeds: [embed] });
-            this.log(`User ${userId} transferred ${amount} coins to ${targetUser.id}`, 'info');
+            await ResponseHelper.send(interaction, embed);
         } catch (error) {
             this.log(`Error in transfer command: ${error.message}`, 'error');
-            await this.sendError(interaction, 'Failed to transfer money');
+            await this.sendError(interaction, 'Failed to process transfer');
         }
     }
 
     /**
      * Deposit command handler
-     * Deposits money to bank
-     * @param {Object} interaction - Discord interaction
+     * Deposits cash into bank
      */
     async deposit(interaction) {
         try {
+            const amount = interaction.options.getInteger('amount');
             const userId = interaction.user.id;
             const guildId = interaction.guild.id;
-            const amount = interaction.options.getInteger('amount');
 
-            // Use service if available, fallback to model
-            let result;
-            if (this.economyService) {
-                result = await this.economyService.deposit(userId, guildId, amount);
-            } else {
-                result = await this.economyModel.deposit(userId, guildId, amount);
-            }
-
-            if (!result.success) {
-                await replyEphemeral(interaction, `❌ ${result.message}`);
+            const service = this.getEconomyService();
+            if (!service) {
+                await this.sendError(interaction, 'Economy service is currently unavailable');
                 return;
             }
 
-            await interaction.reply(`✅ Deposited **${amount} coins** to your bank`);
-            this.log(`User ${userId} deposited ${amount} coins`, 'info');
+            const result = await service.deposit(userId, guildId, amount);
+            if (!result.success) {
+                await this.sendError(interaction, result.message || 'Deposit failed');
+                return;
+            }
+
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.ECONOMY,
+                title: '🏦 Bank Deposit Receipt',
+                fields: [
+                    { name: 'Amount Deposited', value: ResponseHelper.formatMoney(amount), inline: true },
+                    { name: 'Wallet Balance', value: ResponseHelper.formatMoney(result.wallet), inline: true },
+                    { name: 'Bank Balance', value: ResponseHelper.formatMoney(result.bank), inline: true },
+                ],
+                footerText: 'Your coins in the bank are protected from blackjack bets!'
+            });
+
+            await ResponseHelper.send(interaction, embed);
         } catch (error) {
             this.log(`Error in deposit command: ${error.message}`, 'error');
-            await this.sendError(interaction, 'Failed to deposit money');
+            await this.sendError(interaction, 'Failed to deposit money into bank');
         }
     }
 
     /**
      * Withdraw command handler
      * Withdraws money from bank
-     * @param {Object} interaction - Discord interaction
      */
     async withdraw(interaction) {
         try {
+            const amount = interaction.options.getInteger('amount');
             const userId = interaction.user.id;
             const guildId = interaction.guild.id;
-            const amount = interaction.options.getInteger('amount');
 
-            // Use service if available, fallback to model
-            let result;
-            if (this.economyService) {
-                result = await this.economyService.withdraw(userId, guildId, amount);
-            } else {
-                result = await this.economyModel.withdraw(userId, guildId, amount);
-            }
-
-            if (!result.success) {
-                await replyEphemeral(interaction, `❌ ${result.message}`);
+            const service = this.getEconomyService();
+            if (!service) {
+                await this.sendError(interaction, 'Economy service is currently unavailable');
                 return;
             }
 
-            await interaction.reply(`✅ Withdrew **${amount} coins** from your bank`);
-            this.log(`User ${userId} withdrew ${amount} coins`, 'info');
+            const result = await service.withdraw(userId, guildId, amount);
+            if (!result.success) {
+                await this.sendError(interaction, result.message || 'Withdrawal failed');
+                return;
+            }
+
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.ECONOMY,
+                title: '🏧 Bank Withdrawal Receipt',
+                fields: [
+                    { name: 'Amount Withdrawn', value: ResponseHelper.formatMoney(amount), inline: true },
+                    { name: 'Wallet Balance', value: ResponseHelper.formatMoney(result.wallet), inline: true },
+                    { name: 'Bank Balance', value: ResponseHelper.formatMoney(result.bank), inline: true },
+                ],
+                footerText: 'EyeDaemon ATM • Cash Dispensed'
+            });
+
+            await ResponseHelper.send(interaction, embed);
         } catch (error) {
             this.log(`Error in withdraw command: ${error.message}`, 'error');
-            await this.sendError(interaction, 'Failed to withdraw money');
+            await this.sendError(interaction, 'Failed to withdraw money from bank');
         }
     }
 
     /**
      * Blackjack command handler
-     * Starts a blackjack game with interactive buttons
-     * @param {Object} interaction - Discord interaction
+     * Starts a new blackjack casino round
      */
     async blackjack(interaction) {
         try {
+            const bet = interaction.options.getInteger('bet');
             const userId = interaction.user.id;
             const guildId = interaction.guild.id;
-            const bet = interaction.options.getInteger('bet');
 
-            // Check if user already has an active game
-            const existingGame = this.gameService.getBlackjackGame(userId, guildId);
-            if (existingGame && existingGame.status === 'active') {
-                await replyEphemeral(interaction, '❌ You already have an active blackjack game! Finish it first.');
+            const gameService = this.getGameService();
+            const economyService = this.getEconomyService();
+
+            if (!gameService || !economyService) {
+                await this.sendError(interaction, 'Game service is currently unavailable');
                 return;
             }
 
-            // Check balance
-            const balance = await this.economyService.getBalance(userId, guildId);
+            if (bet <= 0) {
+                await this.sendError(interaction, 'Bet amount must be positive!');
+                return;
+            }
+
+            // Verify player balance
+            const balance = await economyService.getBalance(userId, guildId);
             if (balance.wallet < bet) {
-                await replyEphemeral(interaction, `❌ Insufficient balance! You have **${balance.wallet} coins** but need **${bet} coins**`);
+                await this.sendError(interaction, `Insufficient cash wallet! You have ${ResponseHelper.formatMoney(balance.wallet)}, but tried to bet ${ResponseHelper.formatMoney(bet)}.`);
                 return;
             }
 
-            // Deduct bet from balance
-            await this.economyService.removeBalance(userId, guildId, bet, 'Blackjack bet');
+            // Deduct bet amount
+            await economyService.deductBalance(userId, guildId, bet, 'Blackjack initial bet');
 
-            // Create game — if this throws, refund the bet
-            let game;
-            try {
-                game = this.gameService.createBlackjackGame(userId, guildId, bet);
-            } catch (gameError) {
-                await this.economyService.addBalance(userId, guildId, bet, 'Blackjack bet refund (game creation failed)');
-                throw gameError;
-            }
+            // Create new game
+            const game = gameService.createBlackjackGame(userId, guildId, bet);
+            const embed = ResponseHelper.blackjackCard(game);
 
-            // Check for instant blackjack (21 on first two cards)
-            if (game.playerValue === 21) {
-                // Player has blackjack, auto-stand
-                const finalGame = this.gameService.blackjackStand(userId, guildId);
+            // Create Hit and Stand interactive buttons
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId('blackjack_hit')
+                    .setLabel('Hit (Draw Card)')
+                    .setEmoji('🃏')
+                    .setStyle(ButtonStyle.Primary),
+                new ButtonBuilder()
+                    .setCustomId('blackjack_stand')
+                    .setLabel('Stand (End Turn)')
+                    .setEmoji('🛑')
+                    .setStyle(ButtonStyle.Secondary)
+            );
 
-                // Update balance
-                if (finalGame.result === 'win') {
-                    await this.economyService.addBalance(userId, guildId, finalGame.winAmount, 'Blackjack win');
-                } else if (finalGame.result === 'tie') {
-                    await this.economyService.addBalance(userId, guildId, finalGame.bet, 'Blackjack tie (refund)');
-                }
-
-                const embed = this.createBlackjackEmbed(finalGame, 'Blackjack!', 0x2ecc71);
-                await interaction.reply({ embeds: [embed] });
-                return;
-            }
-
-            // Create game embed and buttons
-            const embed = this.createBlackjackEmbed(game, 'Blackjack', 0x3498db);
-            const buttons = this.createBlackjackButtons();
-
-            await interaction.reply({
-                embeds: [embed],
-                components: [buttons]
-            });
-
-            this.log(`User ${userId} started blackjack game with bet ${bet}`, 'info');
+            await ResponseHelper.send(interaction, { embeds: [embed], components: [row] });
         } catch (error) {
             this.log(`Error in blackjack command: ${error.message}`, 'error');
             await this.sendError(interaction, 'Failed to start blackjack game');
@@ -329,276 +388,136 @@ class EconomyController extends Controller {
     }
 
     /**
-     * Create blackjack game embed
-     * @param {Object} game - Game state
-     * @param {string} title - Embed title
-     * @param {number} color - Embed color
-     * @returns {EmbedBuilder} Game embed
-     */
-    createBlackjackEmbed(game, title, color) {
-        const embed = new EmbedBuilder()
-            .setColor(color)
-            .setTitle(`🃏 ${title}`)
-            .addFields(
-                {
-                    name: 'Your Hand',
-                    value: `${this.gameService.formatHand(game.playerHand)}\n**Value: ${game.playerValue}**`,
-                    inline: true
-                },
-                {
-                    name: 'Dealer Hand',
-                    value: game.status === 'active'
-                        ? `${this.gameService.formatCard(game.dealerHand[0])} 🂠\n**Value: ?**`
-                        : `${this.gameService.formatHand(game.dealerHand)}\n**Value: ${game.dealerValue}**`,
-                    inline: true
-                },
-                {
-                    name: 'Bet',
-                    value: `${game.bet} coins`,
-                    inline: true
-                }
-            )
-            .setTimestamp();
-
-        // Add result field if game is over
-        if (game.status !== 'active') {
-            let resultText = '';
-            if (game.result === 'win') {
-                resultText = `🎉 You won **${game.winAmount} coins**!`;
-            } else if (game.result === 'lose') {
-                resultText = `💔 You lost **${game.bet} coins**`;
-            } else if (game.result === 'tie') {
-                resultText = `🤝 It's a tie! You get your **${game.bet} coins** back`;
-            }
-
-            embed.addFields({
-                name: 'Result',
-                value: resultText,
-                inline: false
-            });
-        }
-
-        return embed;
-    }
-
-    /**
-     * Create blackjack control buttons
-     * @returns {ActionRowBuilder} Button row
-     */
-    createBlackjackButtons() {
-        const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-
-        const hitButton = new ButtonBuilder()
-            .setCustomId('blackjack_hit')
-            .setLabel('Hit')
-            .setStyle(ButtonStyle.Primary)
-            .setEmoji('🎴');
-
-        const standButton = new ButtonBuilder()
-            .setCustomId('blackjack_stand')
-            .setLabel('Stand')
-            .setStyle(ButtonStyle.Success)
-            .setEmoji('✋');
-
-        return new ActionRowBuilder().addComponents(hitButton, standButton);
-    }
-
-    /**
      * Shop command handler
-     * Displays all items in the server shop
-     * @param {Object} interaction - Discord interaction
+     * Displays available items in the guild shop
      */
     async shop(interaction) {
         try {
             const guildId = interaction.guild.id;
+            const shopService = this.getShopService();
 
-            const items = await this.shopService.getItems(guildId);
-
-            if (!items || items.length === 0) {
-                await replyEphemeral(interaction, '🏪 The shop is empty! No items available for purchase.');
+            if (!shopService) {
+                await this.sendError(interaction, 'Shop service is currently unavailable');
                 return;
             }
 
-            const embed = new EmbedBuilder()
-                .setColor(0x3498db)
-                .setTitle('🏪 Server Shop')
-                .setDescription('Available items for purchase')
-                .setTimestamp();
+            const items = await shopService.getItems(guildId);
 
-            for (const item of items) {
-                const stockText = item.stock === -1 ? 'Unlimited' : `${item.stock} left`;
-                const roleText = item.role_id ? `\n🎭 Grants role: <@&${item.role_id}>` : '';
-
-                embed.addFields({
-                    name: `${item.name} - ${item.price} coins`,
-                    value: `${item.description}\n📦 Stock: ${stockText}${roleText}\n\`ID: ${item.id}\``,
-                    inline: false
-                });
+            if (!items || items.length === 0) {
+                const embed = ResponseHelper.info(
+                    'Guild Shop Catalog',
+                    'The shop is currently empty! Server administrators can add items using shop management commands.'
+                );
+                await ResponseHelper.send(interaction, embed);
+                return;
             }
 
-            await interaction.reply({ embeds: [embed] });
+            const itemLines = items.map((item, index) => {
+                const stockStr = item.stock === -1 ? '`Unlimited`' : `\`${item.stock} left\``;
+                return `**${index + 1}. ${item.name}** — ${ResponseHelper.formatMoney(item.price)}\n> ${item.description || 'No description'}\n> **Stock:** ${stockStr} • **Item ID:** \`${item.id}\``;
+            });
+
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.ECONOMY,
+                title: `🛍️ ${interaction.guild.name} Shop`,
+                description: [
+                    'Welcome to the server marketplace! Use `/shop-buy item:<id>` to purchase.',
+                    '',
+                    ...itemLines
+                ].join('\n'),
+                footerText: 'Items purchased are automatically added to your /inventory'
+            });
+
+            await ResponseHelper.send(interaction, embed);
         } catch (error) {
             this.log(`Error in shop command: ${error.message}`, 'error');
-            await this.sendError(interaction, 'Failed to load shop');
+            await this.sendError(interaction, 'Failed to fetch guild shop items');
         }
     }
 
     /**
-     * Shop buy command handler
-     * Initiates a purchase with confirmation buttons
-     * @param {Object} interaction - Discord interaction
+     * Shop Buy command handler
      */
     async shopBuy(interaction) {
         try {
+            const itemId = interaction.options.getString('item');
+            const quantity = interaction.options.getInteger('quantity') || 1;
             const userId = interaction.user.id;
             const guildId = interaction.guild.id;
-            const itemIdentifier = interaction.options.getString('item');
-            const quantity = interaction.options.getInteger('quantity') || 1;
 
-            // Get all items to find by name or ID
-            const items = await this.shopService.getItems(guildId);
-            let item = items.find(i => i.id === itemIdentifier || i.name.toLowerCase() === itemIdentifier.toLowerCase());
-
-            if (!item) {
-                await replyEphemeral(interaction, `❌ Item not found. Use \`/shop\` to see available items.`);
+            const shopService = this.getShopService();
+            if (!shopService) {
+                await this.sendError(interaction, 'Shop service is currently unavailable');
                 return;
             }
 
-            // Check stock
-            if (item.stock !== -1 && item.stock < quantity) {
-                await replyEphemeral(interaction, `❌ Insufficient stock. Available: ${item.stock}`);
+            const result = await shopService.purchaseItem(userId, guildId, itemId, quantity);
+            if (!result.success) {
+                await this.sendError(interaction, result.message || 'Purchase failed');
                 return;
             }
 
-            const totalPrice = item.price * quantity;
-
-            // Check balance
-            const balance = await this.economyService.getBalance(userId, guildId);
-            if (balance.wallet < totalPrice) {
-                await replyEphemeral(interaction, `❌ Insufficient balance! You have **${balance.wallet} coins** but need **${totalPrice} coins**`);
-                return;
-            }
-
-            // Create confirmation embed
-            const { ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
-
-            const embed = new EmbedBuilder()
-                .setColor(0xf39c12)
-                .setTitle('🛒 Confirm Purchase')
-                .setDescription(`Are you sure you want to buy **${quantity}x ${item.name}**?`)
-                .addFields(
-                    { name: 'Item', value: item.name, inline: true },
-                    { name: 'Quantity', value: quantity.toString(), inline: true },
-                    { name: 'Total Cost', value: `${totalPrice} coins`, inline: true },
-                    { name: 'Your Balance', value: `${balance.wallet} coins`, inline: true },
-                    { name: 'Balance After', value: `${balance.wallet - totalPrice} coins`, inline: true }
-                )
-                .setFooter({ text: `Item ID: ${item.id} | Quantity: ${quantity}` })
-                .setTimestamp();
-
-            const confirmButton = new ButtonBuilder()
-                .setCustomId('shop_buy_confirm')
-                .setLabel('Confirm Purchase')
-                .setStyle(ButtonStyle.Success)
-                .setEmoji('✅');
-
-            const cancelButton = new ButtonBuilder()
-                .setCustomId('shop_buy_cancel')
-                .setLabel('Cancel')
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji('❌');
-
-            const row = new ActionRowBuilder().addComponents(confirmButton, cancelButton);
-
-            await interaction.reply({
-                embeds: [embed],
-                components: [row],
-                flags: MessageFlags.Ephemeral
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.SUCCESS,
+                title: '🛍️ Item Purchased Successfully!',
+                fields: [
+                    { name: 'Item', value: `**${result.item.name}**`, inline: true },
+                    { name: 'Quantity', value: `\`x${quantity}\``, inline: true },
+                    { name: 'Total Cost', value: ResponseHelper.formatMoney(result.totalPrice), inline: true },
+                    { name: 'Remaining Balance', value: ResponseHelper.formatMoney(result.newBalance), inline: true },
+                ],
+                footerText: 'View your purchased items anytime with /inventory'
             });
 
+            await ResponseHelper.send(interaction, embed);
         } catch (error) {
-            this.log(`Error in shop-buy command: ${error.message}`, 'error');
-            await this.sendError(interaction, 'Failed to process purchase request');
+            this.log(`Error in shopBuy command: ${error.message}`, 'error');
+            await this.sendError(interaction, 'Failed to process item purchase');
         }
     }
 
     /**
      * Inventory command handler
      * Displays user's inventory
-     * @param {Object} interaction - Discord interaction
      */
     async inventory(interaction) {
         try {
             const user = interaction.options.getUser('user') || interaction.user;
             const guildId = interaction.guild.id;
 
-            const inventory = await this.shopService.getInventory(user.id, guildId);
-
-            if (!inventory || inventory.length === 0) {
-                await replyEphemeral(interaction, `📦 ${user.id === interaction.user.id ? 'Your' : `${user.tag}'s`} inventory is empty!`);
+            const shopService = this.getShopService();
+            if (!shopService) {
+                await this.sendError(interaction, 'Shop service is currently unavailable');
                 return;
             }
 
-            const embed = new EmbedBuilder()
-                .setColor(0x9b59b6)
-                .setTitle(`📦 ${user.tag}'s Inventory`)
-                .setThumbnail(user.displayAvatarURL())
-                .setTimestamp();
+            const items = await shopService.getInventory(user.id, guildId);
 
-            for (const item of inventory) {
-                const roleText = item.role_id ? `\n🎭 Role: <@&${item.role_id}>` : '';
-                embed.addFields({
-                    name: `${item.name} (x${item.quantity})`,
-                    value: `${item.description}${roleText}\n💰 Value: ${item.price} coins each`,
-                    inline: false
-                });
+            if (!items || items.length === 0) {
+                const embed = ResponseHelper.info(
+                    'User Inventory',
+                    `**${user.username}** does not have any items in their inventory yet! Check out the \`/shop\` to buy roles and rewards.`
+                );
+                await ResponseHelper.send(interaction, embed);
+                return;
             }
 
-            await interaction.reply({ embeds: [embed] });
+            const itemLines = items.map((item, index) => {
+                return `**${index + 1}. ${item.name}** \`(x${item.quantity})\`\n> ${item.description || 'No description'}\n> Acquired: ${ResponseHelper.formatTimestamp(item.created_at, 'R')}`;
+            });
+
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.ECONOMY,
+                author: { name: `${user.username}'s Inventory Backpack`, iconURL: user.displayAvatarURL?.() || undefined },
+                description: itemLines.join('\n\n'),
+                footerText: `Total Items: ${items.length}`
+            });
+
+            await ResponseHelper.send(interaction, embed);
         } catch (error) {
             this.log(`Error in inventory command: ${error.message}`, 'error');
-            await this.sendError(interaction, 'Failed to load inventory');
+            await this.sendError(interaction, 'Failed to fetch inventory');
         }
-    }
-
-    /**
-     * Override sendError to ensure interaction is acknowledged before replying.
-     * Prevents "Unknown interaction" when an error occurs after 3s window.
-     * @param {Object} interaction - Discord interaction
-     * @param {string} message - Error message
-     * @returns {Promise<void>}
-     */
-    async sendError(interaction, message) {
-        const options = { content: `❌ ${message}`, flags: MessageFlags.Ephemeral };
-
-        try {
-            if (!interaction.deferred && !interaction.replied) {
-                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-            }
-
-            if (interaction.replied || interaction.deferred) {
-                await interaction.editReply(options);
-            } else {
-                await interaction.reply(options);
-            }
-        } catch (error) {
-            this.log(`Failed to send error message: ${error.message}`, 'warn');
-        }
-    }
-
-    /**
-     * Format time to readable string
-     * @param {number} ms - Time in milliseconds
-     * @returns {string} Formatted time
-     */
-    formatTime(ms) {
-        const seconds = Math.floor(ms / 1000);
-        const minutes = Math.floor(seconds / 60);
-        const hours = Math.floor(minutes / 60);
-
-        if (hours > 0) return `${hours}h ${minutes % 60}m`;
-        if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-        return `${seconds}s`;
     }
 }
 

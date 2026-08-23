@@ -2,11 +2,11 @@
  * LevelingController
  * 
  * Handles all leveling-related commands
- * Manages XP, levels, ranks, and rewards
+ * Manages XP, levels, ranks, and leaderboards with ResponseHelper UI.
  */
 
 const Controller = require('../../system/core/Controller');
-const { EmbedBuilder } = require('discord.js');
+const ResponseHelper = require('../../system/helpers/ResponseHelper');
 
 class LevelingController extends Controller {
     /**
@@ -16,29 +16,12 @@ class LevelingController extends Controller {
     constructor(client) {
         super(client);
 
-        // Load services
         this.levelingService = null;
         this.rewardService = null;
     }
 
     /**
-     * Initialize controller and load services
-     */
-    async initialize() {
-        const levelingModule = this.client.modules.get('leveling');
-        if (levelingModule) {
-            this.levelingService = levelingModule.getService('LevelingService');
-            this.rewardService = levelingModule.getService('RewardService');
-        }
-
-        if (!this.levelingService) {
-            this.log('LevelingService not available', 'warn');
-        }
-    }
-
-    /**
-     * Lazy load leveling service if not already available.
-     * Prevents null access when initialize was not awaited.
+     * Lazy load leveling service if not already available
      * @returns {Object|null} LevelingService instance
      */
     getLevelingService() {
@@ -55,8 +38,7 @@ class LevelingController extends Controller {
 
     /**
      * Rank command handler
-     * Displays user's rank and level
-     * @param {Object} interaction - Discord interaction
+     * Displays user's rank and level card
      */
     async rank(interaction) {
         try {
@@ -65,41 +47,39 @@ class LevelingController extends Controller {
 
             const service = this.getLevelingService();
             if (!service) {
-                await this.sendError(interaction, 'Leveling service unavailable');
+                await this.sendError(interaction, 'Leveling service is currently unavailable');
                 return;
             }
 
             const levelData = await service.getUserStats(user.id, guildId);
 
             if (!levelData) {
-                await interaction.reply({ content: '❌ No leveling data found for this user' });
+                const embed = ResponseHelper.info(
+                    'No Level Data',
+                    `**${user.username}** has not earned any XP in this server yet! Send a few messages to start leveling up.`
+                );
+                await ResponseHelper.send(interaction, embed);
                 return;
             }
 
-            const embed = new EmbedBuilder()
-                .setColor(0x9b59b6)
-                .setTitle(`📊 Rank - ${user.tag}`)
-                .addFields(
-                    { name: 'Level', value: `${levelData.level}`, inline: true },
-                    { name: 'XP', value: `${levelData.xp}`, inline: true },
-                    { name: 'Messages', value: `${levelData.totalMessages}`, inline: true },
-                    { name: 'Progress', value: `${levelData.progress.toFixed(1)}%`, inline: true },
-                    { name: 'XP to Next Level', value: `${levelData.xpForNextLevel - levelData.xp}`, inline: true }
-                )
-                .setThumbnail(user.displayAvatarURL())
-                .setTimestamp();
+            const rank = await service.getUserRank(user.id, guildId);
+            const embed = ResponseHelper.rankCard(user, {
+                level: levelData.level,
+                xp: levelData.xp,
+                nextLevelXP: levelData.xpForNextLevel || 100,
+                rank: rank || 1,
+            });
 
-            await interaction.reply({ embeds: [embed] });
+            await ResponseHelper.send(interaction, embed);
         } catch (error) {
             this.log(`Error in rank command: ${error.message}`, 'error');
-            await this.sendError(interaction, 'Failed to fetch rank');
+            await this.sendError(interaction, 'Failed to fetch user rank card');
         }
     }
 
     /**
      * Leaderboard command handler
-     * Displays server leaderboard
-     * @param {Object} interaction - Discord interaction
+     * Displays server XP leaderboard
      */
     async leaderboard(interaction) {
         try {
@@ -111,24 +91,45 @@ class LevelingController extends Controller {
 
             const service = this.getLevelingService();
             if (!service) {
-                await this.sendError(interaction, 'Leveling service unavailable');
+                await this.sendError(interaction, 'Leveling service is currently unavailable');
                 return;
             }
 
             const leaderboard = await service.getLeaderboard(guildId, type, limit);
 
-            if (leaderboard.length === 0) {
-                await interaction.editReply({ content: '❌ No leaderboard data available' });
+            if (!leaderboard || leaderboard.length === 0) {
+                const embed = ResponseHelper.info(
+                    'Server Leaderboard',
+                    'No leaderboard data recorded yet for this server.'
+                );
+                await ResponseHelper.send(interaction, embed);
                 return;
             }
 
-            const embed = new EmbedBuilder()
-                .setColor(0xe74c3c)
-                .setTitle(`🏆 Leaderboard - ${type.toUpperCase()}`)
-                .setDescription(await this.formatLeaderboard(leaderboard, type))
-                .setTimestamp();
+            const medals = ['🥇', '🥈', '🥉'];
+            const lines = leaderboard.map((entry, index) => {
+                const badge = medals[index] || `\`#${(index + 1).toString().padStart(2, '0')}\``;
+                const valueText = type === 'voice'
+                    ? `\`${ResponseHelper.formatDuration((entry.voice_time || 0) * 60)}\` in voice`
+                    : `**${ResponseHelper.formatNumber(entry.xp)} XP** (Level ${entry.level || 0})`;
 
-            await interaction.editReply({ embeds: [embed] });
+                return `${badge} <@${entry.user_id}> — ${valueText}`;
+            });
+
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.LEVELING,
+                title: `🏆 ${interaction.guild.name} • ${type.toUpperCase()} Leaderboard`,
+                description: [
+                    `Top active members ranked by **${type === 'voice' ? 'Voice Time' : 'Experience Points (XP)'}**:`,
+                    '',
+                    ...lines,
+                    '',
+                    ResponseHelper.subtext('Rankings update automatically as you chat and participate!')
+                ].join('\n'),
+                footerText: `Top ${leaderboard.length} Members`
+            });
+
+            await ResponseHelper.send(interaction, embed);
         } catch (error) {
             this.log(`Error in leaderboard command: ${error.message}`, 'error');
             await this.sendError(interaction, 'Failed to fetch leaderboard');
@@ -137,14 +138,11 @@ class LevelingController extends Controller {
 
     /**
      * Give XP command handler (Admin only)
-     * Gives XP to a user
-     * @param {Object} interaction - Discord interaction
      */
     async givexp(interaction) {
         try {
-            // Permission check
             if (!interaction.member.permissions.has('Administrator')) {
-                await interaction.reply({ content: '❌ You need the **Administrator** permission to give XP', ephemeral: true });
+                await this.sendError(interaction, 'You need **Administrator** permission to give XP.', true);
                 return;
             }
 
@@ -154,35 +152,33 @@ class LevelingController extends Controller {
 
             const service = this.getLevelingService();
             if (!service) {
-                await this.sendError(interaction, 'Leveling service unavailable');
+                await this.sendError(interaction, 'Leveling service is currently unavailable');
                 return;
             }
 
             const result = await service.addXP(user.id, guildId, amount);
 
-            // Handle level-up if user leveled up
-            if (result.leveledUp) {
-                await this.levelingService.handleLevelUp(user, result, interaction.guild);
-            }
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.SUCCESS,
+                title: '✨ XP Granted',
+                description: `Successfully awarded **+${ResponseHelper.formatNumber(amount)} XP** to ${user}!\n\n**New Total XP:** \`${ResponseHelper.formatNumber(result.newXP)} XP\` • **Current Level:** \`${result.newLevel}\``
+            });
 
-            await interaction.reply(`✅ Gave **${amount} XP** to ${user}`);
+            await ResponseHelper.send(interaction, embed);
             this.log(`Admin ${interaction.user.id} gave ${amount} XP to ${user.id}`, 'info');
         } catch (error) {
             this.log(`Error in givexp command: ${error.message}`, 'error');
-            await this.sendError(interaction, 'Failed to give XP');
+            await this.sendError(interaction, 'Failed to award XP');
         }
     }
 
     /**
      * Remove XP command handler (Admin only)
-     * Removes XP from a user
-     * @param {Object} interaction - Discord interaction
      */
     async removexp(interaction) {
         try {
-            // Permission check
             if (!interaction.member.permissions.has('Administrator')) {
-                await interaction.reply({ content: '❌ You need the **Administrator** permission to remove XP', ephemeral: true });
+                await this.sendError(interaction, 'You need **Administrator** permission to remove XP.', true);
                 return;
             }
 
@@ -192,13 +188,19 @@ class LevelingController extends Controller {
 
             const service = this.getLevelingService();
             if (!service) {
-                await this.sendError(interaction, 'Leveling service unavailable');
+                await this.sendError(interaction, 'Leveling service is currently unavailable');
                 return;
             }
 
             await service.removeXP(user.id, guildId, amount);
 
-            await interaction.reply(`✅ Removed **${amount} XP** from ${user}`);
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.WARNING,
+                title: '⚡ XP Deducted',
+                description: `Successfully removed **-${ResponseHelper.formatNumber(amount)} XP** from ${user}.`
+            });
+
+            await ResponseHelper.send(interaction, embed);
             this.log(`Admin ${interaction.user.id} removed ${amount} XP from ${user.id}`, 'info');
         } catch (error) {
             this.log(`Error in removexp command: ${error.message}`, 'error');
@@ -208,14 +210,11 @@ class LevelingController extends Controller {
 
     /**
      * Set level command handler (Admin only)
-     * Sets user's level
-     * @param {Object} interaction - Discord interaction
      */
     async setlevel(interaction) {
         try {
-            // Permission check
             if (!interaction.member.permissions.has('Administrator')) {
-                await interaction.reply({ content: '❌ You need the **Administrator** permission to set levels', ephemeral: true });
+                await this.sendError(interaction, 'You need **Administrator** permission to set levels.', true);
                 return;
             }
 
@@ -225,13 +224,19 @@ class LevelingController extends Controller {
 
             const service = this.getLevelingService();
             if (!service) {
-                await this.sendError(interaction, 'Leveling service unavailable');
+                await this.sendError(interaction, 'Leveling service is currently unavailable');
                 return;
             }
 
             await service.setLevel(user.id, guildId, level);
 
-            await interaction.reply(`✅ Set ${user}'s level to **${level}**`);
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.SUCCESS,
+                title: '⭐ Level Updated',
+                description: `Successfully adjusted ${user}'s level directly to **Level ${level}**.`
+            });
+
+            await ResponseHelper.send(interaction, embed);
             this.log(`Admin ${interaction.user.id} set ${user.id}'s level to ${level}`, 'info');
         } catch (error) {
             this.log(`Error in setlevel command: ${error.message}`, 'error');
@@ -241,14 +246,11 @@ class LevelingController extends Controller {
 
     /**
      * Reset XP command handler (Admin only)
-     * Resets user's XP
-     * @param {Object} interaction - Discord interaction
      */
     async resetxp(interaction) {
         try {
-            // Permission check
             if (!interaction.member.permissions.has('Administrator')) {
-                await interaction.reply({ content: '❌ You need the **Administrator** permission to reset XP', ephemeral: true });
+                await this.sendError(interaction, 'You need **Administrator** permission to reset XP.', true);
                 return;
             }
 
@@ -257,64 +259,24 @@ class LevelingController extends Controller {
 
             const service = this.getLevelingService();
             if (!service) {
-                await this.sendError(interaction, 'Leveling service unavailable');
+                await this.sendError(interaction, 'Leveling service is currently unavailable');
                 return;
             }
 
             await service.resetXP(user.id, guildId);
 
-            await interaction.reply(`✅ Reset ${user}'s XP and level`);
-            this.log(`Admin ${interaction.user.id} reset ${user.id}'s XP`, 'info');
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.WARNING,
+                title: '🔄 Leveling Data Reset',
+                description: `All XP and level progression for ${user} has been completely reset to Level 0.`
+            });
+
+            await ResponseHelper.send(interaction, embed);
+            this.log(`Admin ${interaction.user.id} reset XP for ${user.id}`, 'info');
         } catch (error) {
             this.log(`Error in resetxp command: ${error.message}`, 'error');
             await this.sendError(interaction, 'Failed to reset XP');
         }
-    }
-
-    /**
-     * Format leaderboard data
-     * Resolves usernames in batch to avoid N+1 Discord API calls.
-     * @param {Array} leaderboard - Leaderboard data
-     * @param {string} type - Leaderboard type
-     * @returns {Promise<string>} Formatted leaderboard
-     */
-    async formatLeaderboard(leaderboard, type) {
-        // Collect IDs not already in cache
-        const uncachedIds = leaderboard
-            .map(e => e.userId)
-            .filter(id => !this.client.users.cache.has(id));
-
-        // Batch fetch uncached users (single API call via fetchMany if available, else parallel)
-        if (uncachedIds.length > 0) {
-            try {
-                await Promise.all(uncachedIds.map(id => this.client.users.fetch(id).catch(() => null)));
-            } catch {
-                // Non-critical — unknown users will show as 'Unknown User'
-            }
-        }
-
-        const lines = [];
-        for (const entry of leaderboard) {
-            const user = this.client.users.cache.get(entry.userId);
-            const username = user ? user.tag : 'Unknown User';
-
-            let value;
-            switch (type) {
-                case 'level':
-                    value = `Level ${entry.level}`;
-                    break;
-                case 'messages':
-                    value = `${entry.totalMessages} messages`;
-                    break;
-                default:
-                    value = `${entry.xp} XP`;
-            }
-
-            const medal = entry.rank === 1 ? '🥇' : entry.rank === 2 ? '🥈' : entry.rank === 3 ? '🥉' : `**${entry.rank}.**`;
-            lines.push(`${medal} ${username} - ${value}`);
-        }
-
-        return lines.join('\n');
     }
 }
 

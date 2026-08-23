@@ -6,6 +6,7 @@
 
 const BaseInteraction = require('../../../../../system/core/BaseInteraction');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const ResponseHelper = require('../../../../../system/helpers/ResponseHelper');
 
 class HelpLevelingButton extends BaseInteraction {
     constructor(client) {
@@ -29,11 +30,11 @@ class HelpLevelingButton extends BaseInteraction {
             const commandFields = this.formatCommands(commands);
 
             const embed = new EmbedBuilder()
-                .setColor(0x9b59b6)
-                .setTitle('📊 Leveling Commands')
-                .setDescription('Track your progress and compete on the leaderboard')
+                .setColor(ResponseHelper.THEMES.LEVELING)
+                .setTitle('📊 Leveling & XP Commands')
+                .setDescription('Track your XP progression, view rank cards, and compete on leaderboards')
                 .addFields(commandFields)
-                .setFooter({ text: 'Click a category button to view other commands' })
+                .setFooter({ text: 'EyeDaemon Leveling System • Click Back to view other categories' })
                 .setTimestamp();
 
             // Create back button

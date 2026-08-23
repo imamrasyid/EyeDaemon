@@ -1,12 +1,17 @@
+'use strict';
+
 /**
  * Application Configuration
  * 
- * Central configuration file for the bot application
+ * Central configuration file for the unified EyeDaemon application
  */
 
 require('dotenv').config();
 
 module.exports = {
+    // Application
+    version: process.env.npm_package_version || '1.0.0',
+
     // Discord Configuration
     token: process.env.DISCORD_TOKEN,
     clientId: process.env.DISCORD_CLIENT_ID,
@@ -19,18 +24,26 @@ module.exports = {
         ? process.env.DISCORD_MUSIC_CHANNELS.split(',').map(c => c.trim())
         : [],
 
+    // Embedded HTTP Server Configuration
+    server: {
+        enabled: process.env.ENABLE_HTTP_SERVER !== 'false',
+        port: parseInt(process.env.PORT) || parseInt(process.env.AUDIO_SOURCE_PORT) || 3000,
+    },
+
     // Audio Configuration
     audio: {
-        sourceEndpoint: process.env.DISCORD_AUDIO_SOURCE_ENDPOINT || 'http://localhost:3000',
-        sourcePort: parseInt(process.env.AUDIO_SOURCE_PORT) || 3000,
+        ytdlpPath: process.env.YTDLP_PATH || 'yt-dlp',
+        ffmpegPath: process.env.FFMPEG_PATH,
+        cookiesFile: process.env.YTDLP_COOKIES_FILE,
+        cookiesBrowser: process.env.YTDLP_COOKIES_BROWSER,
         defaultVolume: parseInt(process.env.AUDIO_VOLUME_DEFAULT) || 80,
         maxVolume: parseInt(process.env.AUDIO_VOLUME_MAX) || 200,
         bitrate: parseInt(process.env.AUDIO_BITRATE) || 128000,
     },
 
-    // Database Configuration (Turso DB)
+    // Database Configuration (LibSQL / SQLite / Turso)
     database: {
-        url: process.env.TURSO_DATABASE_URL,
+        url: process.env.TURSO_DATABASE_URL || 'file:./data/eyedaemon.db',
         authToken: process.env.TURSO_AUTH_TOKEN,
         syncUrl: process.env.TURSO_SYNC_URL,
         syncInterval: parseInt(process.env.TURSO_SYNC_INTERVAL) || 60000,

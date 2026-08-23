@@ -1,32 +1,27 @@
+'use strict';
+
 /**
- * EyeDaemon Bot - New Bootstrap Entry Point
+ * EyeDaemon Bot - Unified Runtime Entry Point
  * 
- * This is the new entry point using the CodeIgniter-inspired architecture.
- * Uses the Bot class from bootstrap.js to initialize and run the bot.
+ * Initializes and starts the unified Discord bot with embedded HTTP server
+ * and in-process audio streaming.
  */
 
 const Bot = require('./bootstrap');
 const logger = require('./system/helpers/LoggerHelper');
-// const { ensureServerRunning } = require('./system/helpers/ServerHelper');
 
 /**
  * Main function to start the bot
  */
 async function main() {
     try {
-        logger.info('Starting EyeDaemon Bot');
-
-        // Pastikan audio source server berjalan sebelum bot dimulai
-        // await ensureServerRunning();
+        logger.info('Starting EyeDaemon Unified Runtime');
 
         // Create and initialize bot instance
         const bot = new Bot();
         await bot.init();
 
-        // Keep the process alive
-        process.stdin.resume();
-
-        logger.info('Bot is running');
+        logger.info('EyeDaemon is running');
     } catch (error) {
         logger.error('Failed to start EyeDaemon Bot', {
             error: error.message,

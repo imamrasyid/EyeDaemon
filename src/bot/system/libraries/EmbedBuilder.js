@@ -79,10 +79,11 @@ class EmbedBuilderLibrary {
      * @returns {EmbedBuilder} Embed builder instance
      */
     success(message, options = {}) {
+        const ResponseHelper = require('../helpers/ResponseHelper');
         return this.create({
             title: options.title || '✅ Success',
             description: message,
-            color: Colors.Green,
+            color: ResponseHelper.THEMES.SUCCESS,
             ...options,
         });
     }
@@ -94,10 +95,11 @@ class EmbedBuilderLibrary {
      * @returns {EmbedBuilder} Embed builder instance
      */
     error(message, options = {}) {
+        const ResponseHelper = require('../helpers/ResponseHelper');
         return this.create({
             title: options.title || '❌ Error',
             description: message,
-            color: Colors.Red,
+            color: ResponseHelper.THEMES.ERROR,
             ...options,
         });
     }
@@ -109,10 +111,11 @@ class EmbedBuilderLibrary {
      * @returns {EmbedBuilder} Embed builder instance
      */
     warning(message, options = {}) {
+        const ResponseHelper = require('../helpers/ResponseHelper');
         return this.create({
             title: options.title || '⚠️ Warning',
             description: message,
-            color: Colors.Yellow,
+            color: ResponseHelper.THEMES.WARNING,
             ...options,
         });
     }
@@ -124,10 +127,11 @@ class EmbedBuilderLibrary {
      * @returns {EmbedBuilder} Embed builder instance
      */
     info(message, options = {}) {
+        const ResponseHelper = require('../helpers/ResponseHelper');
         return this.create({
             title: options.title || 'ℹ️ Information',
             description: message,
-            color: Colors.Blue,
+            color: ResponseHelper.THEMES.INFO,
             ...options,
         });
     }

@@ -193,18 +193,16 @@ class PlaylistHandler {
                 return;
             }
 
-            // Create embed
-            const { EmbedBuilder } = require('discord.js');
-            const embed = new EmbedBuilder()
-                .setColor(0x00b894)
-                .setTitle(showPublic ? '🌐 Public Playlists' : '📋 Your Playlists')
-                .setDescription(playlists.map((p, i) => {
-                    const visibility = p.isPublic ? '🌐' : '🔒';
-                    return `**${i + 1}.** ${visibility} ${p.name}\n` +
-                        `   ID: \`${p.id}\` | Tracks: ${p.trackCount}`;
-                }).join('\n\n'))
-                .setFooter({ text: `Total: ${playlists.length} playlist${playlists.length !== 1 ? 's' : ''}` })
-                .setTimestamp();
+            const ResponseHelper = require('../../../../system/helpers/ResponseHelper');
+            const embed = ResponseHelper.createEmbed({
+                color: ResponseHelper.THEMES.MUSIC,
+                title: showPublic ? '🌐 Public Server Playlists' : '📋 Your Saved Playlists',
+                description: playlists.map((p, i) => {
+                    const visibility = p.isPublic ? '🌐 Public' : '🔒 Private';
+                    return `**${i + 1}.** ${p.name}\n> **Visibility:** \`${visibility}\` • **Tracks:** \`${p.trackCount || p.tracks?.length || 0}\` • **ID:** \`${p.id}\``;
+                }).join('\n\n'),
+                footerText: `Total: ${playlists.length} playlist${playlists.length !== 1 ? 's' : ''}`
+            });
 
             await interaction.reply({ embeds: [embed] });
         } catch (error) {

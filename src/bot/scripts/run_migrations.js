@@ -1,35 +1,43 @@
+'use strict';
+
 /**
  * Migration Runner Script
  * 
- * Runs all pending database migrations
+ * Runs all pending database migrations against local SQLite or Turso DB.
  */
 
 require('dotenv').config();
 const { createClient } = require('@libsql/client');
 const path = require('path');
+const fs = require('fs');
 const MigrationManager = require('../system/database/MigrationManager');
 const logger = require('../system/helpers/LoggerHelper');
 
 async function runMigrations() {
     try {
-        // Validate environment
-        if (!process.env.TURSO_DATABASE_URL) {
-            console.error('❌ TURSO_DATABASE_URL is required');
+        const dbUrl = process.env.TURSO_DATABASE_URL || 'file:./data/eyedaemon.db';
+        const isLocalFile = dbUrl.startsWith('file:') || dbUrl === ':memory:';
+
+        if (isLocalFile && dbUrl.startsWith('file:')) {
+            const filePath = dbUrl.replace(/^file:/, '');
+            const dir = path.dirname(path.resolve(filePath));
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+        }
+
+        if (!isLocalFile && !process.env.TURSO_AUTH_TOKEN) {
+            console.error('❌ TURSO_AUTH_TOKEN is required for remote database connections');
             process.exit(1);
         }
 
-        if (!process.env.TURSO_AUTH_TOKEN) {
-            console.error('❌ TURSO_AUTH_TOKEN is required');
-            process.exit(1);
+        const clientConfig = { url: dbUrl };
+        if (process.env.TURSO_AUTH_TOKEN) {
+            clientConfig.authToken = process.env.TURSO_AUTH_TOKEN;
         }
 
-        // Create database connection
-        const db = createClient({
-            url: process.env.TURSO_DATABASE_URL,
-            authToken: process.env.TURSO_AUTH_TOKEN,
-        });
+        const db = createClient(clientConfig);
 
-        // Create database wrapper for MigrationManager
         const databaseWrapper = {
             query: async (sql, params = []) => {
                 const result = await db.execute({ sql, args: params });
@@ -46,9 +54,7 @@ async function runMigrations() {
                 const result = await db.execute({ sql, args: params });
                 return result.rows?.[0] || null;
             },
-            // Compatibility for migrations that use db.exec
             exec: async (sql) => {
-                // Split by semicolon newlines to support multi-statement execs
                 const statements = sql
                     .split(/;\s*\n/)
                     .map(s => s.trim())
@@ -57,22 +63,18 @@ async function runMigrations() {
                     await db.execute(stmt);
                 }
             },
-            // Transaction wrapper (libsql http driver doesn't support BEGIN/COMMIT the same way)
-            // We run migrations without wrapping in a transaction to avoid rollback issues.
             transaction: async (fn) => {
                 return await fn(databaseWrapper);
             },
             logger: logger,
         };
 
-        // Initialize migration manager
         const migrationManager = new MigrationManager(databaseWrapper, {
             migrationsPath: path.join(__dirname, '..', 'migrations'),
         });
 
-        console.log('🔄 Running migrations...\n');
+        console.log(`🔄 Running migrations for target [${dbUrl}]...\n`);
 
-        // Run migrations
         const result = await migrationManager.runMigrations();
 
         if (result.success) {
@@ -100,7 +102,6 @@ async function runMigrations() {
     }
 }
 
-// Run if called directly
 if (require.main === module) {
     runMigrations();
 }

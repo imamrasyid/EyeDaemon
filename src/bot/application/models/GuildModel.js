@@ -1,66 +1,62 @@
+'use strict';
+
 /**
  * GuildModel
  * 
- * Model for managing guild-specific configuration and settings.
- * Handles database operations for guild data including DJ roles and other settings.
- * Updated for new Turso DB schema with JSON settings column.
+ * Manages database operations for Discord guilds.
+ * Synchronized with consolidated schema: (guild_id, name, config_json, prefix, created_at, updated_at).
  */
 
 const Model = require('../../system/core/Model');
 
 class GuildModel extends Model {
-    /**
-     * Create a new GuildModel instance
-     * @param {Object} instance - The parent instance (usually a Controller)
-     */
     constructor(instance) {
         super(instance);
         this.tableName = 'guilds';
-        this.primaryKey = 'id';
+        this.primaryKey = 'guild_id';
 
-        // In-memory cache for frequently accessed guilds
+        // In-memory cache
         this.guildCache = new Map();
         this.cacheTimeout = 5 * 60 * 1000; // 5 minutes TTL
     }
 
     /**
-     * Get guild configuration
-     * @param {string} guildId - Discord guild ID
-     * @returns {Promise<Object|null>} Guild configuration or null if not found
+     * Get guild record and configuration
+     * @param {string} guildId
+     * @returns {Promise<Object|null>}
      */
     async getGuildConfig(guildId) {
         try {
-            // Check cache first
             const cached = this._getCachedGuild(guildId);
-            if (cached) {
-                return cached;
-            }
+            if (cached) return cached;
 
             const guild = await this.findById(guildId);
+            if (!guild) return null;
 
-            if (guild) {
-                // Parse settings JSON if it exists and is a string
-                if (guild.settings && typeof guild.settings === 'string') {
-                    try {
-                        guild.settings = JSON.parse(guild.settings);
-                    } catch (parseError) {
-                        this.log(`Failed to parse settings for guild ${guildId}: ${parseError.message}`, 'warn');
-                        guild.settings = {};
-                    }
+            // Parse config_json
+            let config = {};
+            if (guild.config_json && typeof guild.config_json === 'string') {
+                try {
+                    config = JSON.parse(guild.config_json);
+                } catch {
+                    config = {};
                 }
-
-                // Ensure settings object exists
-                if (!guild.settings) {
-                    guild.settings = {};
-                }
-
-                // Cache the result
-                this._cacheGuild(guildId, guild);
-
-                return guild;
+            } else if (guild.config_json && typeof guild.config_json === 'object') {
+                config = guild.config_json;
             }
 
-            return null;
+            const result = {
+                guild_id: guild.guild_id,
+                name: guild.name,
+                prefix: guild.prefix || '!',
+                config: config,
+                settings: config, // alias for backward compatibility
+                created_at: guild.created_at,
+                updated_at: guild.updated_at,
+            };
+
+            this._cacheGuild(guildId, result);
+            return result;
         } catch (error) {
             this.log(`Error getting guild config for ${guildId}: ${error.message}`, 'error');
             throw error;
@@ -68,28 +64,28 @@ class GuildModel extends Model {
     }
 
     /**
-     * Update guild configuration
-     * @param {string} guildId - Discord guild ID
-     * @param {Object} settings - Settings object to save
+     * Update guild configuration JSON
+     * @param {string} guildId
+     * @param {Object} config
      * @returns {Promise<void>}
      */
-    async updateGuildConfig(guildId, settings) {
+    async updateGuildConfig(guildId, config) {
         try {
-            const settingsJson = JSON.stringify(settings);
+            const configJson = JSON.stringify(config);
             const now = Math.floor(Date.now() / 1000);
+            const prefix = config.prefix || '!';
 
-            await this.upsert(
-                {
-                    id: guildId,
-                    settings: settingsJson,
-                    updated_at: now
-                },
-                ['id']
+            await this.query(
+                `INSERT INTO guilds (guild_id, config_json, prefix, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT(guild_id) DO UPDATE SET
+                    config_json = excluded.config_json,
+                    prefix = excluded.prefix,
+                    updated_at = excluded.updated_at`,
+                [guildId, configJson, prefix, now, now]
             );
 
-            // Invalidate cache
             this._invalidateCache(guildId);
-
             this.log(`Updated config for guild ${guildId}`, 'info');
         } catch (error) {
             this.log(`Error updating guild config for ${guildId}: ${error.message}`, 'error');
@@ -98,165 +94,103 @@ class GuildModel extends Model {
     }
 
     /**
-     * Get DJ role ID for a guild
-     * @param {string} guildId - Discord guild ID
-     * @returns {Promise<string|null>} DJ role ID or null if not set
+     * Get DJ role ID
+     * @param {string} guildId
+     * @returns {Promise<string|null>}
      */
     async getDJRole(guildId) {
-        try {
-            const guildConfig = await this.getGuildConfig(guildId);
-
-            if (!guildConfig || !guildConfig.settings) {
-                return null;
-            }
-
-            return guildConfig.settings.dj_role_id || null;
-        } catch (error) {
-            this.log(`Error getting DJ role for guild ${guildId}: ${error.message}`, 'error');
-            throw error;
-        }
+        const guild = await this.getGuildConfig(guildId);
+        return guild?.config?.dj_role || guild?.config?.dj_role_id || null;
     }
 
     /**
-     * Set DJ role for a guild
-     * @param {string} guildId - Discord guild ID
-     * @param {string} roleId - Discord role ID
-     * @returns {Promise<void>}
+     * Set DJ role ID
+     * @param {string} guildId
+     * @param {string} roleId
      */
     async setDJRole(guildId, roleId) {
-        try {
-            const currentConfig = await this.getGuildConfig(guildId);
-            const settings = currentConfig?.settings || {};
-
-            settings.dj_role_id = roleId;
-
-            await this.updateGuildConfig(guildId, settings);
-            this.log(`Set DJ role for guild ${guildId} to ${roleId}`, 'info');
-        } catch (error) {
-            this.log(`Error setting DJ role for guild ${guildId}: ${error.message}`, 'error');
-            throw error;
-        }
+        const guild = await this.getGuildConfig(guildId) || {};
+        const config = guild.config || {};
+        config.dj_role = roleId;
+        config.dj_role_id = roleId;
+        await this.updateGuildConfig(guildId, config);
     }
 
     /**
-     * Remove DJ role for a guild
-     * @param {string} guildId - Discord guild ID
-     * @returns {Promise<void>}
+     * Remove DJ role
+     * @param {string} guildId
      */
     async removeDJRole(guildId) {
-        try {
-            const currentConfig = await this.getGuildConfig(guildId);
-
-            if (!currentConfig || !currentConfig.settings) {
-                return;
-            }
-
-            const settings = currentConfig.settings;
-            delete settings.dj_role_id;
-
-            await this.updateGuildConfig(guildId, settings);
-            this.log(`Removed DJ role for guild ${guildId}`, 'info');
-        } catch (error) {
-            this.log(`Error removing DJ role for guild ${guildId}: ${error.message}`, 'error');
-            throw error;
+        const guild = await this.getGuildConfig(guildId);
+        if (guild?.config) {
+            delete guild.config.dj_role;
+            delete guild.config.dj_role_id;
+            await this.updateGuildConfig(guildId, guild.config);
         }
     }
 
     /**
-     * Get a specific config value for a guild
-     * @param {string} guildId - Discord guild ID
-     * @param {string} key - Config key
-     * @param {*} defaultValue - Default value if key not found
-     * @returns {Promise<*>} Config value or default
+     * Get a specific setting value
+     * @param {string} guildId
+     * @param {string} key
+     * @param {*} defaultValue
+     * @returns {Promise<*>}
      */
     async getConfigValue(guildId, key, defaultValue = null) {
-        try {
-            const guildConfig = await this.getGuildConfig(guildId);
-
-            if (!guildConfig || !guildConfig.settings) {
-                return defaultValue;
-            }
-
-            return guildConfig.settings[key] !== undefined ? guildConfig.settings[key] : defaultValue;
-        } catch (error) {
-            this.log(`Error getting config value ${key} for guild ${guildId}: ${error.message}`, 'error');
-            return defaultValue;
-        }
+        const guild = await this.getGuildConfig(guildId);
+        if (!guild || !guild.config) return defaultValue;
+        return guild.config[key] !== undefined ? guild.config[key] : defaultValue;
     }
 
     /**
-     * Set a specific config value for a guild
-     * @param {string} guildId - Discord guild ID
-     * @param {string} key - Config key
-     * @param {*} value - Config value
-     * @returns {Promise<void>}
+     * Set a specific setting value
+     * @param {string} guildId
+     * @param {string} key
+     * @param {*} value
      */
     async setConfigValue(guildId, key, value) {
-        try {
-            const currentConfig = await this.getGuildConfig(guildId);
-            const settings = currentConfig?.settings || {};
-
-            settings[key] = value;
-
-            await this.updateGuildConfig(guildId, settings);
-            this.log(`Set config ${key} for guild ${guildId}`, 'info');
-        } catch (error) {
-            this.log(`Error setting config value ${key} for guild ${guildId}: ${error.message}`, 'error');
-            throw error;
-        }
+        const guild = await this.getGuildConfig(guildId) || {};
+        const config = guild.config || {};
+        config[key] = value;
+        await this.updateGuildConfig(guildId, config);
     }
 
     /**
-     * Initialize guild with default configuration
-     * @param {string} guildId - Discord guild ID
-     * @param {string} guildName - Discord guild name
-     * @param {string} ownerId - Guild owner ID
-     * @param {string} iconUrl - Guild icon URL
-     * @param {number} memberCount - Guild member count
-     * @returns {Promise<void>}
+     * Initialize guild record
+     * @param {string} guildId
+     * @param {string} guildName
      */
-    async initializeGuild(guildId, guildName, ownerId = null, iconUrl = null, memberCount = 0) {
+    async initializeGuild(guildId, guildName) {
         try {
-            const existing = await this.getGuildConfig(guildId);
-
-            if (existing) {
-                this.log(`Guild ${guildId} already initialized`, 'info');
-                return;
-            }
-
-            const defaultSettings = {
+            const now = Math.floor(Date.now() / 1000);
+            const defaultConfig = {
                 prefix: '!',
-                language: 'en',
-                dj_role_id: null,
-                welcome_channel_id: null,
-                welcome_message: 'Welcome {user}!',
-                goodbye_channel_id: null,
+                dj_role: null,
+                volume_default: 80,
+                max_queue_size: 100,
+                welcome_enabled: false,
+                welcome_channel: null,
+                welcome_message: 'Welcome {user} to {server}!',
+                auto_role: null,
+                goodbye_enabled: false,
+                goodbye_channel: null,
                 goodbye_message: 'Goodbye {user}!',
-                log_channel_id: null,
-                mod_role_id: null,
-                features: {
-                    music: true,
-                    economy: true,
-                    leveling: true,
-                    moderation: true
-                }
+                moderation_log_channel: null,
+                leveling_xp_multiplier: 1.0,
+                economy_starting_balance: 1000,
             };
 
-            const now = Math.floor(Date.now() / 1000);
+            await this.query(
+                `INSERT INTO guilds (guild_id, name, config_json, prefix, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(guild_id) DO UPDATE SET
+                    name = excluded.name,
+                    updated_at = excluded.updated_at`,
+                [guildId, guildName, JSON.stringify(defaultConfig), '!', now, now]
+            );
 
-            await this.insert({
-                id: guildId,
-                name: guildName,
-                owner_id: ownerId,
-                icon_url: iconUrl,
-                member_count: memberCount,
-                settings: JSON.stringify(defaultSettings),
-                created_at: now,
-                joined_at: now,
-                updated_at: now
-            });
-
-            this.log(`Initialized guild ${guildId} with default config`, 'info');
+            this._invalidateCache(guildId);
+            this.log(`Initialized guild ${guildId} (${guildName})`, 'info');
         } catch (error) {
             this.log(`Error initializing guild ${guildId}: ${error.message}`, 'error');
             throw error;
@@ -264,17 +198,13 @@ class GuildModel extends Model {
     }
 
     /**
-     * Delete guild configuration
-     * @param {string} guildId - Discord guild ID
-     * @returns {Promise<void>}
+     * Delete guild record
+     * @param {string} guildId
      */
     async deleteGuild(guildId) {
         try {
-            await this.delete(guildId);
-
-            // Invalidate cache
+            await this.query('DELETE FROM guilds WHERE guild_id = ?', [guildId]);
             this._invalidateCache(guildId);
-
             this.log(`Deleted guild ${guildId}`, 'info');
         } catch (error) {
             this.log(`Error deleting guild ${guildId}: ${error.message}`, 'error');
@@ -282,91 +212,6 @@ class GuildModel extends Model {
         }
     }
 
-    /**
-     * Update a specific guild setting
-     * @param {string} guildId - Discord guild ID
-     * @param {string} setting - Setting key
-     * @param {string} value - Setting value
-     * @returns {Promise<void>}
-     */
-    async updateGuildSetting(guildId, setting, value) {
-        try {
-            await this.setConfigValue(guildId, setting, value);
-            this.log(`Updated guild setting ${setting} for ${guildId}`, 'info');
-        } catch (error) {
-            this.log(`Error updating guild setting ${setting} for ${guildId}: ${error.message}`, 'error');
-            throw error;
-        }
-    }
-
-    /**
-     * Reset guild configuration to defaults
-     * @param {string} guildId - Discord guild ID
-     * @returns {Promise<void>}
-     */
-    async resetGuildConfig(guildId) {
-        try {
-            const defaultSettings = {
-                prefix: '!',
-                language: 'en',
-                dj_role_id: null,
-                welcome_channel_id: null,
-                welcome_message: 'Welcome {user}!',
-                goodbye_channel_id: null,
-                goodbye_message: 'Goodbye {user}!',
-                log_channel_id: null,
-                mod_role_id: null,
-                features: {
-                    music: true,
-                    economy: true,
-                    leveling: true,
-                    moderation: true
-                }
-            };
-
-            await this.updateGuildConfig(guildId, defaultSettings);
-            this.log(`Reset guild config for ${guildId}`, 'info');
-        } catch (error) {
-            this.log(`Error resetting guild config for ${guildId}: ${error.message}`, 'error');
-            throw error;
-        }
-    }
-
-    /**
-     * Update guild metadata (name, icon, member count)
-     * @param {string} guildId - Discord guild ID
-     * @param {Object} metadata - Metadata to update
-     * @returns {Promise<void>}
-     */
-    async updateGuildMetadata(guildId, metadata) {
-        try {
-            const updateData = {
-                updated_at: Math.floor(Date.now() / 1000)
-            };
-
-            if (metadata.name !== undefined) updateData.name = metadata.name;
-            if (metadata.icon_url !== undefined) updateData.icon_url = metadata.icon_url;
-            if (metadata.member_count !== undefined) updateData.member_count = metadata.member_count;
-            if (metadata.owner_id !== undefined) updateData.owner_id = metadata.owner_id;
-
-            await this.update(guildId, updateData);
-
-            // Invalidate cache
-            this._invalidateCache(guildId);
-
-            this.log(`Updated metadata for guild ${guildId}`, 'info');
-        } catch (error) {
-            this.log(`Error updating guild metadata for ${guildId}: ${error.message}`, 'error');
-            throw error;
-        }
-    }
-
-    /**
-     * Cache a guild configuration
-     * @private
-     * @param {string} guildId - Guild ID
-     * @param {Object} guild - Guild data
-     */
     _cacheGuild(guildId, guild) {
         this.guildCache.set(guildId, {
             data: guild,
@@ -374,43 +219,22 @@ class GuildModel extends Model {
         });
     }
 
-    /**
-     * Get cached guild configuration
-     * @private
-     * @param {string} guildId - Guild ID
-     * @returns {Object|null} Cached guild data or null
-     */
     _getCachedGuild(guildId) {
         const cached = this.guildCache.get(guildId);
-
-        if (!cached) {
-            return null;
-        }
-
-        // Check if cache is expired
+        if (!cached) return null;
         if (Date.now() - cached.timestamp > this.cacheTimeout) {
             this.guildCache.delete(guildId);
             return null;
         }
-
         return cached.data;
     }
 
-    /**
-     * Invalidate cache for a guild
-     * @private
-     * @param {string} guildId - Guild ID
-     */
     _invalidateCache(guildId) {
         this.guildCache.delete(guildId);
     }
 
-    /**
-     * Clear all cached guilds
-     */
     clearCache() {
         this.guildCache.clear();
-        this.log('Cleared guild cache', 'info');
     }
 }
 

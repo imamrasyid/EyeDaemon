@@ -1,3 +1,5 @@
+'use strict';
+
 const {
     createAudioPlayer,
     createAudioResource,
@@ -5,28 +7,26 @@ const {
     AudioPlayerStatus,
     NoSubscriberBehavior,
 } = require('@discordjs/voice');
-const axios = require('axios');
-const config = require('../../application/config/config');
-const { retryWithBackoff, isNetworkError } = require('../helpers/RetryHelper');
 const logger = require('../helpers/LoggerHelper');
 const { AudioError } = require('../core/Errors');
+const AudioStreamService = require('../services/AudioStreamService');
 
 /**
  * AudioPlayer Library
- * Manages audio playback for all guilds
- * Handles audio streaming and playback events via local audio server
+ * Manages audio playback for all guilds directly in-process.
+ * Eliminates HTTP loopbacks and separate server process requirements.
  */
 class AudioPlayer {
     constructor(instance, params = {}) {
         this.instance = instance;
         this.players = new Map();
-        this.audioServerUrl = config.audio.sourceEndpoint;
+        this.audioStreamService = new AudioStreamService(instance, params);
     }
 
     /**
      * Get or create audio player for a guild
      * @param {string} guildId - The guild ID
-     * @returns {AudioPlayer} The audio player
+     * @returns {import('@discordjs/voice').AudioPlayer} The audio player
      */
     getPlayer(guildId) {
         if (!this.players.has(guildId)) {
@@ -36,7 +36,6 @@ class AudioPlayer {
                 },
             });
 
-            // Store player
             this.players.set(guildId, player);
 
             // Setup error handling
@@ -46,12 +45,13 @@ class AudioPlayer {
                     stack: error.stack,
                 });
 
-                // Emit custom error event for handling by services
-                this.instance.emit('audioPlayerError', {
-                    guildId,
-                    error,
-                    userMessage: this.getUserFriendlyErrorMessage(error),
-                });
+                if (this.instance && typeof this.instance.emit === 'function') {
+                    this.instance.emit('audioPlayerError', {
+                        guildId,
+                        error,
+                        userMessage: this.getUserFriendlyErrorMessage(error),
+                    });
+                }
             });
         }
         return this.players.get(guildId);
@@ -60,10 +60,10 @@ class AudioPlayer {
     /**
      * Play a track
      * @param {string} guildId - The guild ID
-     * @param {Object} track - The track object with url
+     * @param {Object} track - The track object
      * @param {string} filter - Optional audio filter to apply
      * @param {number} position - Optional start position in seconds
-     * @returns {AudioPlayer} The audio player
+     * @returns {Promise<import('@discordjs/voice').AudioPlayer>} The audio player
      */
     async play(guildId, track, filter = 'none', position = 0) {
         try {
@@ -77,7 +77,6 @@ class AudioPlayer {
                 track: track.title || track.url,
             });
 
-            // Throw user-friendly error
             throw new AudioError(
                 this.getUserFriendlyErrorMessage(error),
                 { guildId, track, originalError: error.message }
@@ -86,18 +85,23 @@ class AudioPlayer {
     }
 
     /**
-     * Create audio resource from track
-     * @param {Object} track - The track object with query or url
-     * @param {string} filter - Optional audio filter to apply
-     * @param {number} position - Optional start position in seconds
-     * @returns {AudioResource} The audio resource
+     * Create audio resource directly from in-process stream
+     * @param {Object} track - Track object
+     * @param {string} filter - Optional audio filter
+     * @param {number} position - Optional seek position in seconds
+     * @returns {Promise<import('@discordjs/voice').AudioResource>}
      */
     async createAudioResource(track, filter = 'none', position = 0) {
         try {
-            // Use original query if available, otherwise use URL
             const query = track.query || track.url;
-            const stream = await this.getAudioStream(query, filter, position);
-            // WebM/Opus stream from server — use WebmOpus to skip ffmpeg transcoding entirely
+            const stream = await this.audioStreamService.getAudioStream({
+                query,
+                streamUrl: track.streamUrl,
+                start: position,
+                filter,
+                format: 'webm',
+            });
+
             return createAudioResource(stream, {
                 inputType: StreamType.WebmOpus,
                 inlineVolume: true,
@@ -113,70 +117,11 @@ class AudioPlayer {
             );
         }
     }
-    /**
-     * Get audio stream from local audio server
-     * @param {string} query - The track query or URL
-     * @param {string} filter - Optional audio filter to apply
-     * @param {number} position - Optional start position in seconds
-     * @returns {Stream} The audio stream
-     */
-    async getAudioStream(query, filter = 'none', position = 0) {
-        // Use retry logic for getting audio stream
-        return retryWithBackoff(
-            async () => {
-                try {
-                    const params = { query };
-
-                    if (filter && filter !== 'none') {
-                        params.filter = filter;
-                    }
-
-                    if (position > 0) {
-                        params.position = position;
-                    }
-
-                    const response = await axios.get(`${this.audioServerUrl}/api/audio/stream`, {
-                        params,
-                        responseType: 'stream',
-                        timeout: 30000,
-                    });
-
-                    if (!response.data) {
-                        throw new AudioError('No audio stream received from server');
-                    }
-
-                    return response.data;
-                } catch (error) {
-                    logger.error('Failed to get audio stream', { error: error.message, query, filter, position });
-
-                    if (isNetworkError(error)) {
-                        throw error; // Will be retried
-                    }
-
-                    if (error.response) {
-                        if (error.response.status === 404) throw new AudioError('Track not found or unavailable');
-                        if (error.response.status === 403) throw new AudioError('Access to track is restricted');
-                        if (error.response.status >= 500) throw new AudioError('Audio server is experiencing issues');
-                    }
-
-                    throw new AudioError(`Failed to get audio stream: ${error.message}`);
-                }
-            },
-            {
-                maxRetries: 2,
-                initialDelay: 300, // reduced from 1000ms — music needs fast recovery
-                shouldRetry: (error) => isNetworkError(error),
-                onRetry: (error, attempt) => {
-                    logger.warn('Retrying audio stream request', { attempt: attempt + 1, error: error.message, query });
-                },
-            }
-        );
-    }
 
     /**
      * Pause playback
-     * @param {string} guildId - The guild ID
-     * @returns {boolean} True if paused successfully
+     * @param {string} guildId - Guild ID
+     * @returns {boolean}
      */
     pause(guildId) {
         const player = this.players.get(guildId);
@@ -189,8 +134,8 @@ class AudioPlayer {
 
     /**
      * Resume playback
-     * @param {string} guildId - The guild ID
-     * @returns {boolean} True if resumed successfully
+     * @param {string} guildId - Guild ID
+     * @returns {boolean}
      */
     resume(guildId) {
         const player = this.players.get(guildId);
@@ -203,8 +148,8 @@ class AudioPlayer {
 
     /**
      * Stop playback
-     * @param {string} guildId - The guild ID
-     * @returns {boolean} True if stopped successfully
+     * @param {string} guildId - Guild ID
+     * @returns {boolean}
      */
     stop(guildId) {
         const player = this.players.get(guildId);
@@ -217,8 +162,8 @@ class AudioPlayer {
 
     /**
      * Get player status
-     * @param {string} guildId - The guild ID
-     * @returns {string|null} The player status or null
+     * @param {string} guildId - Guild ID
+     * @returns {string|null}
      */
     getStatus(guildId) {
         const player = this.players.get(guildId);
@@ -227,8 +172,8 @@ class AudioPlayer {
 
     /**
      * Check if player is playing
-     * @param {string} guildId - The guild ID
-     * @returns {boolean} True if playing
+     * @param {string} guildId - Guild ID
+     * @returns {boolean}
      */
     isPlaying(guildId) {
         const player = this.players.get(guildId);
@@ -237,8 +182,8 @@ class AudioPlayer {
 
     /**
      * Check if player is paused
-     * @param {string} guildId - The guild ID
-     * @returns {boolean} True if paused
+     * @param {string} guildId - Guild ID
+     * @returns {boolean}
      */
     isPaused(guildId) {
         const player = this.players.get(guildId);
@@ -247,14 +192,13 @@ class AudioPlayer {
 
     /**
      * Set volume for a player
-     * @param {string} guildId - The guild ID
+     * @param {string} guildId - Guild ID
      * @param {number} volume - Volume level (0-100)
-     * @returns {boolean} True if volume set successfully
+     * @returns {boolean}
      */
     setVolume(guildId, volume) {
         const player = this.players.get(guildId);
         if (player && player.state.resource && player.state.resource.volume) {
-            // Convert 0-100 to 0-1
             const volumeLevel = Math.max(0, Math.min(100, volume)) / 100;
             player.state.resource.volume.setVolume(volumeLevel);
             return true;
@@ -264,7 +208,7 @@ class AudioPlayer {
 
     /**
      * Remove player for a guild
-     * @param {string} guildId - The guild ID
+     * @param {string} guildId - Guild ID
      */
     removePlayer(guildId) {
         const player = this.players.get(guildId);
@@ -277,56 +221,31 @@ class AudioPlayer {
     /**
      * Get user-friendly error message
      * @param {Error} error - The error
-     * @returns {string} User-friendly error message
+     * @returns {string}
      */
     getUserFriendlyErrorMessage(error) {
         const message = error.message?.toLowerCase() || '';
 
-        // Network errors
-        if (isNetworkError(error)) {
-            return '❌ Network error occurred. Please check your connection and try again.';
-        }
-
-        // Audio server errors
-        if (message.includes('audio server')) {
-            return '❌ The audio server is currently unavailable. Please try again later.';
-        }
-
-        // Track unavailable
         if (message.includes('unavailable') || message.includes('not found') || message.includes('404')) {
             return '❌ This track is unavailable or has been removed.';
         }
-
-        // Access restricted
         if (message.includes('restricted') || message.includes('403') || message.includes('forbidden')) {
             return '❌ Access to this track is restricted.';
         }
-
-        // Stream errors
         if (message.includes('stream') || message.includes('no audio')) {
             return '❌ Failed to stream audio. The track might be unavailable.';
         }
-
-        // Timeout errors
         if (message.includes('timeout') || message.includes('timed out')) {
             return '❌ Request timed out. Please try again.';
         }
-
-        // Format errors
-        if (message.includes('format') || message.includes('codec')) {
-            return '❌ This audio format is not supported.';
-        }
-
-        // Generic error
         return '❌ Failed to play audio. Please try again.';
     }
 
     /**
      * Cleanup all players
-     * Used during bot shutdown
      */
     cleanup() {
-        for (const [guildId, player] of this.players.entries()) {
+        for (const [, player] of this.players.entries()) {
             player.stop();
         }
         this.players.clear();

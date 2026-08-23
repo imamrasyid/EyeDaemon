@@ -1,10 +1,14 @@
+'use strict';
+
 /**
  * Database Library
  * 
- * Manages Turso DB connection using LibSQL client.
- * Provides query interface and connection management.
+ * Manages LibSQL client connection (local SQLite file or remote Turso DB).
+ * Provides robust query interface, retry logic, connection pooling, and transactions.
  */
 
+const fs = require('fs');
+const path = require('path');
 const { createClient } = require('@libsql/client');
 const { DatabaseError } = require('../core/Errors');
 const { retryWithBackoff, shouldRetryError } = require('../helpers/RetryHelper');
@@ -22,36 +26,54 @@ class DatabaseLibrary {
      */
     constructor(client, options = {}) {
         this.client = client;
-        this.logger = client.logger || console;
+        this.logger = client?.logger || console;
+
+        const defaultUrl = 'file:./data/eyedaemon.db';
+        const url = options.url || process.env.TURSO_DATABASE_URL || defaultUrl;
+        const authToken = options.authToken || process.env.TURSO_AUTH_TOKEN || null;
 
         // Database configuration
         this.config = {
-            url: options.url || process.env.TURSO_DATABASE_URL,
-            authToken: options.authToken || process.env.TURSO_AUTH_TOKEN,
-            syncUrl: options.syncUrl || process.env.TURSO_SYNC_URL,
+            url,
+            authToken,
+            syncUrl: options.syncUrl || process.env.TURSO_SYNC_URL || null,
             syncInterval: options.syncInterval || 60000,
-            encryptionKey: options.encryptionKey || process.env.TURSO_ENCRYPTION_KEY,
+            encryptionKey: options.encryptionKey || process.env.TURSO_ENCRYPTION_KEY || null,
             ...options
         };
 
-        // Validate required configuration
-        if (!this.config.url) {
-            throw new DatabaseError('TURSO_DATABASE_URL is required', {
-                config: 'missing url'
+        // Determine if local or remote
+        this.isRemote = this.config.url.startsWith('libsql://') ||
+                        this.config.url.startsWith('https://') ||
+                        this.config.url.startsWith('http://');
+
+        // Validate auth token only for remote databases
+        if (this.isRemote && !this.config.authToken) {
+            throw new DatabaseError('TURSO_AUTH_TOKEN is required for remote Turso connection', {
+                url: this.config.url
             });
         }
 
-        if (!this.config.authToken) {
-            throw new DatabaseError('TURSO_AUTH_TOKEN is required', {
-                config: 'missing authToken'
-            });
+        // Auto-create local database directory if file URL
+        if (this.config.url.startsWith('file:')) {
+            const rawPath = this.config.url.replace(/^file:/, '');
+            if (rawPath && rawPath !== ':memory:' && !rawPath.startsWith(':memory:')) {
+                const resolvedDir = path.dirname(path.resolve(process.cwd(), rawPath));
+                try {
+                    if (!fs.existsSync(resolvedDir)) {
+                        fs.mkdirSync(resolvedDir, { recursive: true });
+                    }
+                } catch (fsErr) {
+                    this.log(`Failed to create database directory ${resolvedDir}: ${fsErr.message}`, 'warn');
+                }
+            }
         }
 
         this.db = null;
         this.isConnected = false;
         this.transactionDepth = 0;
 
-        // Initialize transaction manager (will be fully initialized after connection)
+        // Initialize transaction manager (fully initialized on connect)
         this.transactionManager = null;
 
         // Initialize prepared statement cache
@@ -59,9 +81,10 @@ class DatabaseLibrary {
             maxSize: options.cacheSize || 100
         });
 
-        // Initialize query performance logger
+        // Initialize query performance logger (adaptive threshold: 2500ms for remote Turso, 500ms for local SQLite)
+        const defaultSlowThreshold = this.isRemote ? 2500 : 500;
         this.performanceLogger = new QueryPerformanceLogger({
-            slowQueryThreshold: options.slowQueryThreshold || 1000,
+            slowQueryThreshold: options.slowQueryThreshold || Number(process.env.DB_SLOW_QUERY_THRESHOLD) || defaultSlowThreshold,
             logger: this.logger,
             enabled: options.enablePerformanceLogging !== false
         });
@@ -73,9 +96,9 @@ class DatabaseLibrary {
         this.metricsTracker = new QueryMetricsTracker({
             logger: this.logger,
             enabled: options.enableMetricsTracking !== false,
-            avgThreshold: options.avgThreshold || 500,
-            p95Threshold: options.p95Threshold || 1000,
-            p99Threshold: options.p99Threshold || 2000
+            avgThreshold: options.avgThreshold || (this.isRemote ? 1500 : 300),
+            p95Threshold: options.p95Threshold || (this.isRemote ? 2500 : 600),
+            p99Threshold: options.p99Threshold || (this.isRemote ? 4000 : 1000)
         });
     }
 
@@ -87,20 +110,32 @@ class DatabaseLibrary {
         return await retryWithBackoff(
             async () => {
                 try {
-                    // Create LibSQL client
-                    this.db = createClient({
+                    const clientConfig = {
                         url: this.config.url,
-                        authToken: this.config.authToken,
-                        syncUrl: this.config.syncUrl,
-                        syncInterval: this.config.syncInterval,
-                        encryptionKey: this.config.encryptionKey,
-                    });
+                    };
+
+                    if (this.config.authToken) {
+                        clientConfig.authToken = this.config.authToken;
+                    }
+                    if (this.config.syncUrl) {
+                        clientConfig.syncUrl = this.config.syncUrl;
+                    }
+                    if (this.config.syncInterval) {
+                        clientConfig.syncInterval = this.config.syncInterval;
+                    }
+                    if (this.config.encryptionKey) {
+                        clientConfig.encryptionKey = this.config.encryptionKey;
+                    }
+
+                    // Create LibSQL client
+                    this.db = createClient(clientConfig);
 
                     // Test connection with a simple query
                     await this.db.execute('SELECT 1');
 
                     this.isConnected = true;
-                    this.log('Database connected successfully to Turso DB', 'info');
+                    const dbType = this.isRemote ? 'Remote Turso DB' : 'Local SQLite DB';
+                    this.log(`Database connected successfully to ${dbType} (${this.config.url})`, 'info');
 
                     // Initialize transaction manager with database wrapper
                     this.transactionManager = new TransactionManager(this, {
@@ -117,7 +152,7 @@ class DatabaseLibrary {
                     await initializeSchema(this);
                 } catch (error) {
                     this.log(`Failed to connect to database: ${error.message}`, 'error');
-                    throw new DatabaseError('Failed to connect to Turso DB', {
+                    throw new DatabaseError('Failed to connect to Database', {
                         originalError: error.message,
                         url: this.config.url
                     });
@@ -129,7 +164,6 @@ class DatabaseLibrary {
                 maxDelay: 5000,
                 backoffMultiplier: 2,
                 shouldRetry: (error) => {
-                    // Retry on network errors and connection issues
                     return shouldRetryError(error) || this._isLibSQLRetryableError(error);
                 },
                 onRetry: (error, attempt) => {
@@ -182,39 +216,33 @@ class DatabaseLibrary {
             });
         }
 
-        // Start performance tracking
         const startTime = Date.now();
         let success = true;
         let error = null;
 
         try {
-            // Execute query with retry logic
             const result = await retryWithBackoff(
                 async () => {
                     try {
-                        // Determine query type
                         const queryType = sql.trim().toUpperCase().split(' ')[0];
 
-                        // Execute query with LibSQL
                         const result = await this.db.execute({
                             sql,
                             args: params
                         });
 
-                        // Format response based on query type
-                        if (queryType === 'SELECT') {
-                            // SELECT queries return rows
+                        if (queryType === 'SELECT' || queryType === 'PRAGMA') {
                             return result.rows || [];
                         } else if (queryType === 'INSERT' || queryType === 'UPDATE' || queryType === 'DELETE') {
-                            // INSERT/UPDATE/DELETE queries return metadata
                             return {
                                 changes: result.rowsAffected || 0,
+                                rowsAffected: result.rowsAffected || 0,
                                 lastInsertRowid: result.lastInsertRowid || null
                             };
                         } else {
-                            // Other queries (CREATE, DROP, etc.)
                             return {
-                                changes: result.rowsAffected || 0
+                                changes: result.rowsAffected || 0,
+                                rowsAffected: result.rowsAffected || 0
                             };
                         }
                     } catch (err) {
@@ -232,7 +260,6 @@ class DatabaseLibrary {
                     maxDelay: 1000,
                     backoffMultiplier: 2,
                     shouldRetry: (error) => {
-                        // Retry on network errors, timeouts, and busy errors
                         return shouldRetryError(error) || this._isLibSQLRetryableError(error);
                     },
                     onRetry: (error, attempt) => {
@@ -251,7 +278,6 @@ class DatabaseLibrary {
             error = err;
             throw err;
         } finally {
-            // Log performance and track metrics
             const executionTime = Date.now() - startTime;
             this.performanceLogger.logQuery(sql, params, executionTime, success, error);
             this.metricsTracker.recordExecutionTime(executionTime);
@@ -260,8 +286,8 @@ class DatabaseLibrary {
 
     /**
      * Check if error is a LibSQL retryable error
-     * @param {Error} error - The error to check
-     * @returns {boolean} True if error should be retried
+     * @param {Error} error
+     * @returns {boolean}
      * @private
      */
     _isLibSQLRetryableError(error) {
@@ -310,57 +336,25 @@ class DatabaseLibrary {
             });
         }
 
-        // Get from cache or create new prepared statement
-        return this.preparedStatementCache.get(sql, (sql) => {
-            // Return a wrapper object that mimics prepared statement interface
+        return this.preparedStatementCache.get(sql, (statementSql) => {
+            const dbRef = this;
             return {
-                sql,
-                db: this.db,
+                sql: statementSql,
 
-                /**
-                 * Execute prepared statement with parameters
-                 * @param {Array} params - Query parameters
-                 * @returns {Promise<Array|Object>} Query results
-                 */
                 async run(...params) {
-                    const result = await this.db.execute({
-                        sql: this.sql,
-                        args: params
-                    });
-
-                    return {
-                        changes: result.rowsAffected || 0,
-                        lastInsertRowid: result.lastInsertRowid || null
-                    };
+                    const args = Array.isArray(params[0]) && params.length === 1 ? params[0] : params;
+                    return await dbRef.query(statementSql, args);
                 },
 
-                /**
-                 * Execute prepared statement and return all rows
-                 * @param {Array} params - Query parameters
-                 * @returns {Promise<Array>} All rows
-                 */
                 async all(...params) {
-                    const result = await this.db.execute({
-                        sql: this.sql,
-                        args: params
-                    });
-
-                    return result.rows || [];
+                    const args = Array.isArray(params[0]) && params.length === 1 ? params[0] : params;
+                    const res = await dbRef.query(statementSql, args);
+                    return Array.isArray(res) ? res : [];
                 },
 
-                /**
-                 * Execute prepared statement and return first row
-                 * @param {Array} params - Query parameters
-                 * @returns {Promise<Object|null>} First row or null
-                 */
                 async get(...params) {
-                    const result = await this.db.execute({
-                        sql: this.sql,
-                        args: params
-                    });
-
-                    const rows = result.rows || [];
-                    return rows.length > 0 ? rows[0] : null;
+                    const args = Array.isArray(params[0]) && params.length === 1 ? params[0] : params;
+                    return await dbRef.queryOne(statementSql, args);
                 }
             };
         });
@@ -400,8 +394,8 @@ class DatabaseLibrary {
 
     /**
      * Get recent slow queries
-     * @param {number} limit - Maximum number of queries to return
-     * @returns {Array} Recent slow queries
+     * @param {number} limit
+     * @returns {Array}
      */
     getRecentSlowQueries(limit = 10) {
         return this.performanceLogger.getRecentSlowQueries(limit);
@@ -433,7 +427,7 @@ class DatabaseLibrary {
 
     /**
      * Get query optimizer instance
-     * @returns {QueryOptimizer} Query optimizer
+     * @returns {QueryOptimizer}
      */
     getOptimizer() {
         return this.queryOptimizer;
@@ -441,9 +435,9 @@ class DatabaseLibrary {
 
     /**
      * Analyze a query for optimization opportunities
-     * @param {string} sql - SQL query
-     * @param {Array} params - Query parameters
-     * @returns {Object} Analysis result with recommendations
+     * @param {string} sql
+     * @param {Array} params
+     * @returns {Object}
      */
     analyzeQuery(sql, params = []) {
         return this.queryOptimizer.analyzeQuery(sql, params);
@@ -451,7 +445,7 @@ class DatabaseLibrary {
 
     /**
      * Get index recommendations based on query history
-     * @returns {Array<Object>} Index recommendations
+     * @returns {Array<Object>}
      */
     getIndexRecommendations() {
         const queryHistory = this.performanceLogger.queryHistory;
@@ -460,14 +454,14 @@ class DatabaseLibrary {
 
     /**
      * Get query execution metrics (avg, p95, p99)
-     * @returns {Object} Query execution metrics
+     * @returns {Object}
      */
     getQueryMetrics() {
         return this.metricsTracker.getMetrics();
     }
 
     /**
-     * Set performance baseline for degradation detection
+     * Set performance baseline
      */
     setPerformanceBaseline() {
         this.metricsTracker.setBaseline();
@@ -476,7 +470,7 @@ class DatabaseLibrary {
 
     /**
      * Get degradation alerts
-     * @returns {Array<Object>} Performance degradation alerts
+     * @returns {Array<Object>}
      */
     getDegradationAlerts() {
         return this.metricsTracker.getDegradationAlerts();
@@ -492,7 +486,7 @@ class DatabaseLibrary {
 
     /**
      * Check if metrics exceed thresholds
-     * @returns {Array<Object>} Threshold violations
+     * @returns {Array<Object>}
      */
     checkMetricThresholds() {
         return this.metricsTracker.checkThresholds();
@@ -500,7 +494,7 @@ class DatabaseLibrary {
 
     /**
      * Generate comprehensive metrics report
-     * @returns {Object} Metrics report with performance data and alerts
+     * @returns {Object}
      */
     generateMetricsReport() {
         return this.metricsTracker.generateReport();
@@ -532,7 +526,7 @@ class DatabaseLibrary {
 
     /**
      * Begin a transaction
-     * @param {Object} options - Transaction options (timeout, etc.)
+     * @param {Object} options
      * @returns {Promise<void>}
      */
     async beginTransaction(options = {}) {
@@ -584,7 +578,6 @@ class DatabaseLibrary {
             this.transactionDepth = this.transactionManager.getDepth();
             this.log(`Transaction committed (depth: ${this.transactionDepth})`, 'debug');
         } catch (error) {
-            // Sync depth after error
             this.transactionDepth = this.transactionManager.getDepth();
             throw new DatabaseError('Failed to commit transaction', {
                 originalError: error.message,
@@ -616,7 +609,6 @@ class DatabaseLibrary {
             this.transactionDepth = this.transactionManager.getDepth();
             this.log(`Transaction rolled back (depth: ${this.transactionDepth})`, 'debug');
         } catch (error) {
-            // Sync depth after error
             this.transactionDepth = this.transactionManager.getDepth();
             throw new DatabaseError('Failed to rollback transaction', {
                 originalError: error.message,
@@ -627,9 +619,9 @@ class DatabaseLibrary {
 
     /**
      * Execute multiple statements in a transaction
-     * @param {Function} callback - Callback function to execute
-     * @param {Object} options - Transaction options (timeout, etc.)
-     * @returns {Promise<any>} Result of callback
+     * @param {Function} callback
+     * @param {Object} options
+     * @returns {Promise<any>}
      */
     async transaction(callback, options = {}) {
         if (!this.transactionManager) {
@@ -639,19 +631,15 @@ class DatabaseLibrary {
         }
 
         try {
-            const result = await this.transactionManager.execute(async () => {
-                // Sync depth
+            const result = await this.transactionManager.execute(async (txWrapper) => {
                 this.transactionDepth = this.transactionManager.getDepth();
-                return await callback(this);
+                return await callback(txWrapper);
             }, options);
 
-            // Sync depth after success
             this.transactionDepth = this.transactionManager.getDepth();
             return result;
         } catch (error) {
-            // Sync depth after error
             this.transactionDepth = this.transactionManager.getDepth();
-
             this.log(`Transaction failed and rolled back: ${error.message}`, 'error');
 
             throw new DatabaseError('Transaction failed', {
@@ -663,9 +651,9 @@ class DatabaseLibrary {
 
     /**
      * Execute transaction with automatic deadlock retry
-     * @param {Function} callback - Callback function to execute
-     * @param {Object} options - Transaction and retry options
-     * @returns {Promise<any>} Result of callback
+     * @param {Function} callback
+     * @param {Object} options
+     * @returns {Promise<any>}
      */
     async transactionWithRetry(callback, options = {}) {
         if (!this.transactionManager) {
@@ -675,19 +663,15 @@ class DatabaseLibrary {
         }
 
         try {
-            const result = await this.transactionManager.executeWithRetry(async () => {
-                // Sync depth
+            const result = await this.transactionManager.executeWithRetry(async (txWrapper) => {
                 this.transactionDepth = this.transactionManager.getDepth();
-                return await callback(this);
+                return await callback(txWrapper);
             }, options);
 
-            // Sync depth after success
             this.transactionDepth = this.transactionManager.getDepth();
             return result;
         } catch (error) {
-            // Sync depth after error
             this.transactionDepth = this.transactionManager.getDepth();
-
             this.log(`Transaction with retry failed: ${error.message}`, 'error');
 
             throw new DatabaseError('Transaction with retry failed', {
@@ -704,7 +688,6 @@ class DatabaseLibrary {
      */
     async recoverTransactionDepth() {
         if (!this.transactionManager) {
-            // If no transaction manager, just reset depth
             this.transactionDepth = 0;
             return;
         }
@@ -723,7 +706,7 @@ class DatabaseLibrary {
 
     /**
      * Validate transaction depth consistency
-     * @returns {boolean} True if consistent
+     * @returns {boolean}
      */
     validateTransactionDepth() {
         if (!this.transactionManager) {
@@ -733,7 +716,6 @@ class DatabaseLibrary {
         const isConsistent = this.transactionManager.validateDepth();
         const managerDepth = this.transactionManager.getDepth();
 
-        // Sync if inconsistent
         if (this.transactionDepth !== managerDepth) {
             this.transactionDepth = managerDepth;
         }
@@ -743,7 +725,7 @@ class DatabaseLibrary {
 
     /**
      * Get transaction statistics
-     * @returns {Object} Transaction statistics
+     * @returns {Object}
      */
     getTransactionStats() {
         if (!this.transactionManager) {
@@ -758,7 +740,7 @@ class DatabaseLibrary {
 
     /**
      * Check if currently in a transaction
-     * @returns {boolean} True if in transaction
+     * @returns {boolean}
      */
     isInTransaction() {
         if (!this.transactionManager) {
@@ -784,7 +766,6 @@ class DatabaseLibrary {
         return await retryWithBackoff(
             async () => {
                 try {
-                    // LibSQL supports batch operations natively
                     const results = await this.db.batch(statements);
                     return results;
                 } catch (error) {
@@ -830,7 +811,6 @@ class DatabaseLibrary {
             });
         }
 
-        // If less than batch size, use regular inserts
         if (records.length < batchSize) {
             return await this.transaction(async () => {
                 const results = [];
@@ -848,7 +828,6 @@ class DatabaseLibrary {
             });
         }
 
-        // Use batch operation for larger datasets
         const statements = records.map(record => {
             const columns = Object.keys(record);
             const placeholders = columns.map(() => '?').join(', ');
@@ -884,7 +863,6 @@ class DatabaseLibrary {
             });
         }
 
-        // If less than batch size, use regular updates
         if (updates.length < batchSize) {
             return await this.transaction(async () => {
                 const results = [];
@@ -904,7 +882,6 @@ class DatabaseLibrary {
             });
         }
 
-        // Use batch operation for larger datasets
         const statements = updates.map(update => {
             const { where, data } = update;
             const setClause = Object.keys(data).map(key => `${key} = ?`).join(', ');
@@ -944,7 +921,6 @@ class DatabaseLibrary {
             });
         }
 
-        // If less than batch size, use IN clause
         if (ids.length < batchSize) {
             const placeholders = ids.map(() => '?').join(', ');
             const sql = `DELETE FROM ${table} WHERE ${idColumn} IN (${placeholders})`;
@@ -956,7 +932,6 @@ class DatabaseLibrary {
             };
         }
 
-        // Use batch operation for larger datasets
         const statements = ids.map(id => ({
             sql: `DELETE FROM ${table} WHERE ${idColumn} = ?`,
             args: [id]

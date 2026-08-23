@@ -567,29 +567,15 @@ class ModerationService extends BaseService {
                 unmute: 0x2ecc71,
             };
 
-            const actionEmojis = {
-                warn: '⚠️',
-                kick: '👢',
-                ban: '🔨',
-                unban: '✅',
-                timeout: '⏱️',
-                mute: '🔇',
-                unmute: '🔊',
-            };
-
-            const embed = new EmbedBuilder()
-                .setColor(actionColors[action] || 0x95a5a6)
-                .setTitle(`${actionEmojis[action] || '📋'} Moderation Action: ${action.toUpperCase()}`)
-                .addFields(
-                    { name: 'Target', value: `${target.tag} (${target.id})`, inline: true },
-                    { name: 'Moderator', value: `${moderator.tag} (${moderator.id})`, inline: true },
-                    { name: 'Reason', value: reason || 'No reason provided' }
-                )
-                .setTimestamp();
-
-            if (extra.duration) {
-                embed.addFields({ name: 'Duration', value: `${extra.duration} minutes` });
-            }
+            const ResponseHelper = require('../../../../system/helpers/ResponseHelper');
+            const embed = ResponseHelper.moderationCard({
+                action: action.toUpperCase(),
+                target,
+                moderator,
+                reason: reason || 'No reason provided',
+                duration: extra.duration ? `${extra.duration} minutes` : undefined,
+                caseId: extra.caseId || undefined,
+            });
 
             await logChannel.send({ embeds: [embed] });
             return true;
