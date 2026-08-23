@@ -7,7 +7,7 @@
  */
 
 require('dotenv').config();
-const { createClient } = require('@libsql/client');
+const { createLibsqlClient } = require('../system/helpers/LibsqlHelper');
 const path = require('path');
 const fs = require('fs');
 const MigrationManager = require('../system/database/MigrationManager');
@@ -36,7 +36,7 @@ async function runMigrations() {
             clientConfig.authToken = process.env.TURSO_AUTH_TOKEN;
         }
 
-        const db = createClient(clientConfig);
+        const db = createLibsqlClient(clientConfig);
 
         const databaseWrapper = {
             query: async (sql, params = []) => {

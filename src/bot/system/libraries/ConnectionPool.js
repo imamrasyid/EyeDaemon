@@ -47,7 +47,7 @@
  * ```
  */
 
-const { createClient } = require('@libsql/client');
+const { createLibsqlClient } = require('../helpers/LibsqlHelper');
 const { DatabaseError } = require('../core/Errors');
 
 class ConnectionPool {
@@ -164,12 +164,12 @@ class ConnectionPool {
      */
     async _createConnection() {
         try {
-            const client = createClient({
+            const client = createLibsqlClient({
                 url: this.dbConfig.url,
                 authToken: this.dbConfig.authToken,
                 syncUrl: this.dbConfig.syncUrl,
                 syncInterval: this.dbConfig.syncInterval,
-                encryptionKey: this.dbConfig.encryptionKey,
+                encryptionKey: this.dbConfig.encryptionKey
             });
 
             // Test connection
