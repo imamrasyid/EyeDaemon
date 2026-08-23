@@ -127,8 +127,17 @@ class DatabaseLibrary {
                         clientConfig.encryptionKey = this.config.encryptionKey;
                     }
 
-                    // Create LibSQL client
-                    this.db = createClient(clientConfig);
+                    // Create LibSQL client with fallback for HTTP/Web client
+                    try {
+                        this.db = createClient(clientConfig);
+                    } catch (clientErr) {
+                        if (this.isRemote) {
+                            const { createClient: createHttpClient } = require('@libsql/client/http');
+                            this.db = createHttpClient(clientConfig);
+                        } else {
+                            throw clientErr;
+                        }
+                    }
 
                     // Test connection with a simple query
                     await this.db.execute('SELECT 1');
