@@ -60,7 +60,7 @@
     "cli-progress": "^3.12.0",
     "concurrently": "^10.0.1",
     "fast-check": "^4.8.0",
-    "jest": "^30.4.2",
+    "jest": "^30.5.1",
     "nodemon": "^3.1.14"
   },
   "allowScripts": {
