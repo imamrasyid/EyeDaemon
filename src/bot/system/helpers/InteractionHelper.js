@@ -7,20 +7,39 @@
 const { MessageFlags } = require('discord.js');
 
 /**
+ * Check if an interaction has expired (cannot be replied to)
+ * @param {Object} interaction - Discord interaction
+ * @returns {boolean} True if interaction is too old to respond
+ */
+function isInteractionExpired(interaction) {
+    const creationTime = interaction.createdTimestamp;
+    const now = Date.now();
+    const ELIGIBLE_MS = 14 * 60 * 1000;
+    return (now - creationTime) > ELIGIBLE_MS;
+}
+
+/**
  * Reply to an interaction with ephemeral message
  * @param {Object} interaction - Discord interaction
  * @param {string|Object} content - Message content or options object
  * @returns {Promise<void>}
  */
 async function replyEphemeral(interaction, content) {
+    if (isInteractionExpired(interaction)) return;
+
     const options = typeof content === 'string'
         ? { content, flags: MessageFlags.Ephemeral }
         : { ...content, flags: MessageFlags.Ephemeral };
 
-    if (interaction.replied || interaction.deferred) {
-        return await interaction.editReply(options);
-    } else {
-        return await interaction.reply(options);
+    try {
+        if (interaction.replied || interaction.deferred) {
+            return await interaction.editReply(options);
+        } else {
+            return await interaction.reply(options);
+        }
+    } catch (error) {
+        if (error.code === 10062 || error.code === 50013) return;
+        throw error;
     }
 }
 
@@ -31,14 +50,21 @@ async function replyEphemeral(interaction, content) {
  * @returns {Promise<void>}
  */
 async function replyPublic(interaction, content) {
+    if (isInteractionExpired(interaction)) return;
+
     const options = typeof content === 'string'
         ? { content }
         : content;
 
-    if (interaction.replied || interaction.deferred) {
-        return await interaction.editReply(options);
-    } else {
-        return await interaction.reply(options);
+    try {
+        if (interaction.replied || interaction.deferred) {
+            return await interaction.editReply(options);
+        } else {
+            return await interaction.reply(options);
+        }
+    } catch (error) {
+        if (error.code === 10062 || error.code === 50013) return;
+        throw error;
     }
 }
 
@@ -83,6 +109,7 @@ async function sendSuccess(interaction, message) {
 }
 
 module.exports = {
+    isInteractionExpired,
     replyEphemeral,
     replyPublic,
     deferEphemeral,

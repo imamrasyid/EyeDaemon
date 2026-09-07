@@ -80,7 +80,7 @@ class FfmpegProvider {
 
         let isClosed = false;
 
-        // Cleanup helper to safely terminate child process
+        // Cleanup helper to safely terminate child process and orphaned input process
         const cleanup = () => {
             if (isClosed) return;
             isClosed = true;
@@ -89,6 +89,12 @@ class FfmpegProvider {
                 if (!proc.stdout.destroyed) proc.stdout.destroy();
                 if (!proc.killed) proc.kill('SIGKILL');
             } catch {}
+
+            // Kill orphaned input process (e.g. yt-dlp) if attached to inputStream
+            const inputProc = inputStream?._ytdlpProcess;
+            if (inputProc && typeof inputProc.kill === 'function' && !inputProc.killed) {
+                try { inputProc.kill('SIGKILL'); } catch {}
+            }
         };
 
         // Pipe input to ffmpeg stdin

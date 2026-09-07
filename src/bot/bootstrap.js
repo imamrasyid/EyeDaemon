@@ -242,6 +242,16 @@ class Bot {
                 }
             }
 
+            // Cleanup audio players and kill orphaned yt-dlp/ffmpeg processes
+            if (this.audioPlayer) {
+                this.audioPlayer.cleanup();
+                // Kill any orphaned yt-dlp child processes
+                const streamService = this.audioPlayer.audioStreamService;
+                if (streamService?.ytdlpProvider) {
+                    streamService.ytdlpProvider.cleanupAll();
+                }
+            }
+
             // Shutdown presence manager
             if (this.presenceManager) {
                 this.presenceManager.shutdown();

@@ -22,9 +22,6 @@ class AudioStreamService extends BaseService {
         super(client, options);
         this.ytdlpProvider = new YtdlpProvider(options);
         this.ffmpegProvider = new FfmpegProvider(options);
-
-        // In-flight deduplication for identical stream queries
-        this.inFlight = new Map();
     }
 
     /**
@@ -39,7 +36,6 @@ class AudioStreamService extends BaseService {
      */
     async getAudioStream({ query, streamUrl, start = 0, filter = 'none', format = 'webm' }) {
         const sanitizedQuery = this.sanitizeQuery(query);
-        const inflightKey = `${sanitizedQuery}|${filter}|${start}`;
 
         this.log(`Requesting audio stream: "${query}" (seek=${start}s, filter=${filter})`, 'debug');
 
@@ -54,10 +50,10 @@ class AudioStreamService extends BaseService {
                 });
             } catch (cdnErr) {
                 this.log(`Fast path CDN error (${cdnErr.message}), falling back to yt-dlp for: ${query}`, 'warn');
-                return await this._slowPathStream({ sanitizedQuery, inflightKey, start, filter, format });
+                return await this._slowPathStream({ sanitizedQuery, start, filter, format });
             }
         } else {
-            return await this._slowPathStream({ sanitizedQuery, inflightKey, start, filter, format });
+            return await this._slowPathStream({ sanitizedQuery, start, filter, format });
         }
     }
 
@@ -65,16 +61,8 @@ class AudioStreamService extends BaseService {
      * Slow path stream resolution using yt-dlp spawn + FFmpeg transcoding
      * @private
      */
-    async _slowPathStream({ sanitizedQuery, inflightKey, start, filter, format }) {
-        let streamPromise = this.inFlight.get(inflightKey);
-        if (!streamPromise) {
-            streamPromise = this.ytdlpProvider.getAudioStream(sanitizedQuery).finally(() => {
-                this.inFlight.delete(inflightKey);
-            });
-            this.inFlight.set(inflightKey, streamPromise);
-        }
-
-        const ytdlpStream = await streamPromise;
+    async _slowPathStream({ sanitizedQuery, start, filter, format }) {
+        const ytdlpStream = await this.ytdlpProvider.getAudioStream(sanitizedQuery);
 
         return this.ffmpegProvider.processAudio({
             inputStream: ytdlpStream,

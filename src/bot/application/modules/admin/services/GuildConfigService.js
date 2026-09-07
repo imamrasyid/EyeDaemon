@@ -28,8 +28,15 @@ class GuildConfigService extends BaseService {
     initializeSettingRegistry() {
         const registry = new Map();
 
+        const isValidBoolean = (value) => {
+            if (typeof value === 'boolean') return true;
+            if (typeof value === 'string') return ['true', 'false'].includes(value.toLowerCase());
+            return false;
+        };
+
         registry.set('prefix', {
             type: 'string',
+            format: 'text',
             default: '!',
             description: 'Command prefix for the bot',
             category: 'general',
@@ -38,6 +45,7 @@ class GuildConfigService extends BaseService {
 
         registry.set('dj_role', {
             type: 'role',
+            format: 'role',
             default: null,
             description: 'Role required for DJ commands',
             category: 'music',
@@ -46,6 +54,7 @@ class GuildConfigService extends BaseService {
 
         registry.set('volume_default', {
             type: 'number',
+            format: 'number',
             default: 80,
             description: 'Default volume for music playback (0-200)',
             category: 'music',
@@ -57,6 +66,7 @@ class GuildConfigService extends BaseService {
 
         registry.set('max_queue_size', {
             type: 'number',
+            format: 'number',
             default: 100,
             description: 'Maximum number of tracks in queue',
             category: 'music',
@@ -68,14 +78,16 @@ class GuildConfigService extends BaseService {
 
         registry.set('welcome_enabled', {
             type: 'boolean',
+            format: 'boolean',
             default: false,
             description: 'Enable welcome messages for new members',
             category: 'welcome',
-            validate: (value) => value === true || value === false || value === 'true' || value === 'false',
+            validate: isValidBoolean,
         });
 
         registry.set('welcome_channel', {
             type: 'channel',
+            format: 'channel',
             default: null,
             description: 'Channel for welcome messages',
             category: 'welcome',
@@ -84,6 +96,7 @@ class GuildConfigService extends BaseService {
 
         registry.set('welcome_message', {
             type: 'string',
+            format: 'text',
             default: 'Welcome {user} to {server}!',
             description: 'Welcome message template',
             category: 'welcome',
@@ -92,6 +105,7 @@ class GuildConfigService extends BaseService {
 
         registry.set('auto_role', {
             type: 'role',
+            format: 'role',
             default: null,
             description: 'Role to automatically assign to new members',
             category: 'welcome',
@@ -100,14 +114,16 @@ class GuildConfigService extends BaseService {
 
         registry.set('goodbye_enabled', {
             type: 'boolean',
+            format: 'boolean',
             default: false,
             description: 'Enable goodbye messages when members leave',
             category: 'welcome',
-            validate: (value) => value === true || value === false || value === 'true' || value === 'false',
+            validate: isValidBoolean,
         });
 
         registry.set('goodbye_channel', {
             type: 'channel',
+            format: 'channel',
             default: null,
             description: 'Channel for goodbye messages',
             category: 'welcome',
@@ -116,6 +132,7 @@ class GuildConfigService extends BaseService {
 
         registry.set('goodbye_message', {
             type: 'string',
+            format: 'text',
             default: 'Goodbye {user}!',
             description: 'Goodbye message template',
             category: 'welcome',
@@ -124,6 +141,7 @@ class GuildConfigService extends BaseService {
 
         registry.set('moderation_log_channel', {
             type: 'channel',
+            format: 'channel',
             default: null,
             description: 'Channel for moderation logs',
             category: 'moderation',
@@ -132,6 +150,7 @@ class GuildConfigService extends BaseService {
 
         registry.set('leveling_xp_multiplier', {
             type: 'number',
+            format: 'number',
             default: 1.0,
             description: 'XP multiplier for leveling (0.1-10.0)',
             category: 'leveling',
@@ -143,6 +162,7 @@ class GuildConfigService extends BaseService {
 
         registry.set('economy_starting_balance', {
             type: 'number',
+            format: 'number',
             default: 1000,
             description: 'Starting balance for new members',
             category: 'economy',
@@ -150,6 +170,105 @@ class GuildConfigService extends BaseService {
                 const num = Number(value);
                 return !isNaN(num) && num >= 0 && num <= 1000000;
             },
+        });
+
+        registry.set('logging_enabled', {
+            type: 'boolean',
+            format: 'boolean',
+            default: false,
+            description: 'Enable event logging for moderation and audit',
+            category: 'logging',
+            validate: isValidBoolean,
+        });
+
+        registry.set('logging_channel', {
+            type: 'channel',
+            format: 'channel',
+            default: null,
+            description: 'Channel for bot event logs',
+            category: 'logging',
+            validate: (value, guild) => this.validateChannel(value, guild),
+        });
+
+        registry.set('logging_events', {
+            type: 'string',
+            format: 'text',
+            default: 'all',
+            description: 'Events to log: all, moderation, joins, none',
+            category: 'logging',
+            validate: (value) => ['all', 'moderation', 'joins', 'none'].includes(value),
+        });
+
+        registry.set('admin_role', {
+            type: 'role',
+            format: 'role',
+            default: null,
+            description: 'Role with admin-level permissions for bot management',
+            category: 'roles',
+            validate: (value, guild) => this.validateRole(value, guild),
+        });
+
+        registry.set('moderator_role', {
+            type: 'role',
+            format: 'role',
+            default: null,
+            description: 'Role with moderation permissions (warn, mute, kick)',
+            category: 'roles',
+            validate: (value, guild) => this.validateRole(value, guild),
+        });
+
+        registry.set('features_logging', {
+            type: 'boolean',
+            format: 'boolean',
+            default: true,
+            description: 'Enable logging module for this guild',
+            category: 'features',
+            validate: isValidBoolean,
+        });
+
+        registry.set('features_moderation', {
+            type: 'boolean',
+            format: 'boolean',
+            default: true,
+            description: 'Enable moderation module for this guild',
+            category: 'features',
+            validate: isValidBoolean,
+        });
+
+        registry.set('features_music', {
+            type: 'boolean',
+            format: 'boolean',
+            default: true,
+            description: 'Enable music module for this guild',
+            category: 'features',
+            validate: isValidBoolean,
+        });
+
+        registry.set('features_economy', {
+            type: 'boolean',
+            format: 'boolean',
+            default: true,
+            description: 'Enable economy module for this guild',
+            category: 'features',
+            validate: isValidBoolean,
+        });
+
+        registry.set('features_leveling', {
+            type: 'boolean',
+            format: 'boolean',
+            default: true,
+            description: 'Enable leveling module for this guild',
+            category: 'features',
+            validate: isValidBoolean,
+        });
+
+        registry.set('features_tickets', {
+            type: 'boolean',
+            format: 'boolean',
+            default: true,
+            description: 'Enable ticket module for this guild',
+            category: 'features',
+            validate: isValidBoolean,
         });
 
         return registry;
@@ -186,6 +305,14 @@ class GuildConfigService extends BaseService {
     }
 
     /**
+     * Reset cache hit/miss counters to zero.
+     */
+    resetCacheStats() {
+        this.cacheStats.hits = 0;
+        this.cacheStats.misses = 0;
+    }
+
+    /**
      * Get guild config
      */
     async getGuildConfig(guildId) {
@@ -199,6 +326,7 @@ class GuildConfigService extends BaseService {
             }
 
             this.cacheStats.misses++;
+            this.cleanupExpiredCache();
 
             const db = this.getDatabase();
             if (!db) throw new Error('Database connection not available');
@@ -303,15 +431,16 @@ class GuildConfigService extends BaseService {
             const metadata = this.settingRegistry.get(key);
             const defaultValue = metadata.default;
             const currentConfig = await this.getGuildConfig(guildId);
-            delete currentConfig[key];
+            const configCopy = JSON.parse(JSON.stringify(currentConfig));
+            delete configCopy[key];
 
             const db = this.getDatabase();
             if (!db) throw new Error('Database connection not available');
 
             const guild = this.getGuild(guildId);
             const guildName = guild?.name || 'Guild';
-            const prefix = currentConfig.prefix || '!';
-            const configJson = JSON.stringify(currentConfig);
+            const prefix = configCopy.prefix || '!';
+            const configJson = JSON.stringify(configCopy);
             const now = Math.floor(Date.now() / 1000);
 
             await db.query(
@@ -342,12 +471,26 @@ class GuildConfigService extends BaseService {
         }
     }
 
+    /**
+     * Get default config values from the setting registry.
+     * Single source of truth for all default guild configuration.
+     * @returns {Object} Default config keyed by setting name
+     */
+    getDefaults() {
+        const defaults = {};
+        for (const [key, metadata] of this.settingRegistry.entries()) {
+            defaults[key] = metadata.default;
+        }
+        return defaults;
+    }
+
     listAvailableSettings() {
         const settings = [];
         for (const [key, metadata] of this.settingRegistry.entries()) {
             settings.push({
                 key,
                 type: metadata.type,
+                format: metadata.format || metadata.type,
                 default: metadata.default,
                 description: metadata.description,
                 category: metadata.category,
@@ -378,7 +521,8 @@ class GuildConfigService extends BaseService {
                 return Number(value);
             case 'boolean':
                 if (typeof value === 'boolean') return value;
-                return value === 'true' || value === true;
+                if (typeof value === 'string') return value.toLowerCase() === 'true';
+                return Boolean(value);
             case 'string':
                 return String(value);
             case 'role':

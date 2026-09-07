@@ -118,6 +118,21 @@ class ReadyEvent extends BaseEvent {
                         options: command.options || [],
                     };
 
+                    // Pass permission restrictions to Discord API
+                    if (command.defaultMemberPermissions !== undefined) {
+                        commandData.default_member_permissions = String(command.defaultMemberPermissions);
+                    }
+
+                    // Restrict command availability (guild-only, DM, etc.)
+                    if (command.contexts) {
+                        commandData.contexts = command.contexts;
+                    }
+
+                    // Restrict installation types
+                    if (command.integrationTypes) {
+                        commandData.integration_types = command.integrationTypes;
+                    }
+
                     commands.push(commandData);
                 }
             }

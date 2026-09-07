@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * GuildMemberRemove Event Handler
  * 
@@ -19,14 +21,14 @@ class GuildMemberRemoveEvent extends BaseEvent {
         this.log(`Member left: ${member.user.tag} from guild ${member.guild.name}`, 'info');
 
         try {
+            // Send goodbye message if enabled
+            await this.sendGoodbyeMessage(member);
+
             // Log member leave
             const moderationLoggingService = this.client.moderationLoggingService;
             if (moderationLoggingService) {
                 await moderationLoggingService.log_member_leave(member.guild.id, member.user.id);
             }
-
-            // Cleanup member-specific data if needed
-            await this.cleanupMemberData(member);
         } catch (error) {
             this.log('Failed to handle member leave', 'error', {
                 guildId: member.guild.id,
@@ -38,24 +40,92 @@ class GuildMemberRemoveEvent extends BaseEvent {
     }
 
     /**
-     * Cleanup member-specific data
+     * Send goodbye message when member leaves
      * @param {Object} member - Discord member object
      */
-    async cleanupMemberData(member) {
+    async sendGoodbyeMessage(member) {
         try {
-            // Cleanup voice connection if member was in voice
-            if (member.voice.channel) {
-                // Member was in voice, cleanup handled by voice state update
+            const guildConfigService = this.getGuildConfigService();
+
+            if (!guildConfigService) {
+                this.log('GuildConfigService not available, skipping goodbye message', 'debug');
+                return;
             }
 
-            // Cleanup any member-specific caches
-            // This can be extended based on your needs
+            const goodbyeEnabled = await guildConfigService.getSetting(member.guild.id, 'goodbye_enabled');
+
+            if (!goodbyeEnabled) {
+                this.log(`Goodbye messages disabled for guild ${member.guild.id}`, 'debug');
+                return;
+            }
+
+            const goodbyeChannelId = await guildConfigService.getSetting(member.guild.id, 'goodbye_channel');
+
+            if (!goodbyeChannelId) {
+                this.log(`No goodbye channel configured for guild ${member.guild.id}`, 'debug');
+                return;
+            }
+
+            const goodbyeChannel = member.guild.channels.cache.get(goodbyeChannelId);
+
+            if (!goodbyeChannel) {
+                this.log(`Goodbye channel ${goodbyeChannelId} not found in guild ${member.guild.id}`, 'warn');
+                return;
+            }
+
+            const permissions = goodbyeChannel.permissionsFor(member.guild.members.me);
+            if (!permissions || !permissions.has('SendMessages')) {
+                this.log(`Bot lacks SendMessages permission in goodbye channel ${goodbyeChannelId}`, 'warn');
+                return;
+            }
+
+            let goodbyeMessage = await guildConfigService.getSetting(member.guild.id, 'goodbye_message');
+
+            if (!goodbyeMessage) {
+                goodbyeMessage = 'Goodbye {user}! We will miss you.';
+            }
+
+            const memberCount = member.guild.memberCount;
+            goodbyeMessage = goodbyeMessage
+                .replace(/{user}/g, `<@${member.user.id}>`)
+                .replace(/{server}/g, member.guild.name)
+                .replace(/{memberCount}/g, memberCount.toString());
+
+            await goodbyeChannel.send(goodbyeMessage);
+
+            this.log(`Sent goodbye message for ${member.user.tag} in guild ${member.guild.name}`, 'info');
         } catch (error) {
-            this.log('Failed to cleanup member data', 'error', {
+            this.log('Failed to send goodbye message', 'error', {
                 guildId: member.guild.id,
                 userId: member.user.id,
                 error: error.message,
+                stack: error.stack,
             });
+        }
+    }
+
+    /**
+     * Get GuildConfigService from client
+     * @returns {Object|null} GuildConfigService instance or null
+     */
+    getGuildConfigService() {
+        try {
+            const adminModule = this.client.modules?.get('admin');
+            if (adminModule) {
+                const service = adminModule.getService('GuildConfigService');
+                if (service) {
+                    return service;
+                }
+            }
+
+            if (this.client.services && this.client.services.has('GuildConfigService')) {
+                return this.client.services.get('GuildConfigService');
+            }
+
+            return null;
+        } catch (error) {
+            this.log(`Error getting GuildConfigService: ${error.message}`, 'error');
+            return null;
         }
     }
 

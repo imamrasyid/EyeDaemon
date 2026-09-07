@@ -15,7 +15,7 @@ describe('Module & Slash Command Definitions Schema', () => {
     });
 
     const expectedCommandsPerModule = {
-        admin: ['config', 'performance', 'health'],
+        admin: ['config', 'logs', 'roles', 'features', 'bot', 'performance', 'health'],
         economy: ['balance', 'daily', 'work', 'transfer', 'deposit', 'withdraw', 'blackjack', 'shop', 'shop-buy', 'inventory'],
         leveling: ['rank', 'leaderboard', 'givexp', 'removexp', 'setlevel', 'resetxp'],
         moderation: ['warn', 'kick', 'ban', 'unban', 'timeout', 'purge', 'warnings'],
@@ -77,8 +77,8 @@ describe('Module & Slash Command Definitions Schema', () => {
         });
     }
 
-    test('total registered commands equals 56', () => {
+    test('total registered commands equals 60', () => {
         const total = Object.values(expectedCommandsPerModule).reduce((acc, curr) => acc + curr.length, 0);
-        expect(total).toBe(56);
+        expect(total).toBe(60);
     });
 });

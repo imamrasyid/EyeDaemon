@@ -147,14 +147,23 @@ class AudioPlayer {
     }
 
     /**
-     * Stop playback
+     * Stop playback and clean up underlying streams/processes
      * @param {string} guildId - Guild ID
      * @returns {boolean}
      */
     stop(guildId) {
         const player = this.players.get(guildId);
         if (player) {
+            const resource = player.state?.resource;
+
             player.stop();
+
+            // Destroy the underlying stream to unblock ffmpeg/yt-dlp pipes
+            this._destroyStream(resource?.stream);
+
+            // Kill orphaned yt-dlp process if attached to the stream
+            this._killOrphanedProcess(resource?.stream);
+
             return true;
         }
         return false;
@@ -213,8 +222,34 @@ class AudioPlayer {
     removePlayer(guildId) {
         const player = this.players.get(guildId);
         if (player) {
+            const resource = player.state?.resource;
             player.stop();
+            this._destroyStream(resource?.stream);
+            this._killOrphanedProcess(resource?.stream);
             this.players.delete(guildId);
+        }
+    }
+
+    /**
+     * Safely destroy a readable stream
+     * @param {import('stream').Readable|null} stream
+     * @private
+     */
+    _destroyStream(stream) {
+        if (stream && typeof stream.destroy === 'function' && !stream.destroyed) {
+            stream.destroy();
+        }
+    }
+
+    /**
+     * Kill an orphaned child process attached to a stream (e.g. yt-dlp)
+     * @param {import('stream').Readable|null} stream
+     * @private
+     */
+    _killOrphanedProcess(stream) {
+        const proc = stream?._ytdlpProcess;
+        if (proc && typeof proc.kill === 'function' && !proc.killed) {
+            try { proc.kill('SIGKILL'); } catch {}
         }
     }
 
@@ -242,11 +277,14 @@ class AudioPlayer {
     }
 
     /**
-     * Cleanup all players
+     * Cleanup all players and their streams/processes
      */
     cleanup() {
-        for (const [, player] of this.players.entries()) {
+        for (const [guildId, player] of this.players.entries()) {
+            const resource = player.state?.resource;
             player.stop();
+            this._destroyStream(resource?.stream);
+            this._killOrphanedProcess(resource?.stream);
         }
         this.players.clear();
     }

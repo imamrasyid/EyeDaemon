@@ -33,6 +33,9 @@ class YtdlpProvider {
         this.ytdlpPath = config.ytdlpPath || process.env.YTDLP_PATH || defaultPath;
         this.timeout = config.ytdlpTimeout || 30000;
 
+        // Track active child processes for cleanup on stop/shutdown
+        this.activeProcesses = new Set();
+
         // Prefer WebM/Opus (format 251) with fallback to any best audio
         this.audioFormat = config.audioFormat || process.env.YTDLP_AUDIO_FORMAT || '251/bestaudio[ext=webm]/bestaudio/ba/b';
 
@@ -188,10 +191,11 @@ class YtdlpProvider {
         logger.debug('Spawning yt-dlp for audio stream', { query });
 
         const proc = spawn(this.ytdlpPath, args);
+        this.activeProcesses.add(proc);
 
         let timeoutId = setTimeout(() => {
             logger.warn('yt-dlp stream start timeout', { query });
-            proc.kill('SIGTERM');
+            this._killProcess(proc, 'SIGTERM');
         }, this.timeout);
 
         let streamStarted = false;
@@ -205,6 +209,7 @@ class YtdlpProvider {
 
         proc.on('close', (code) => {
             clearTimeout(timeoutId);
+            this.activeProcesses.delete(proc);
             if (code !== 0 && code !== null) {
                 logger.error('yt-dlp stream closed with error', { code, query });
             }
@@ -212,6 +217,7 @@ class YtdlpProvider {
 
         proc.on('error', (err) => {
             clearTimeout(timeoutId);
+            this.activeProcesses.delete(proc);
             logger.error('yt-dlp stream spawn error', { error: err.message, query });
         });
 
@@ -221,7 +227,35 @@ class YtdlpProvider {
             if (errorOutput) logger.debug('yt-dlp stderr', { error: errorOutput, query });
         });
 
+        // Attach proc reference to stdout so upstream callers can kill it on stream.destroy()
+        proc.stdout._ytdlpProcess = proc;
+
         return proc.stdout;
+    }
+
+    /**
+     * Kill a child process safely (handles already-dead processes)
+     * @param {import('child_process').ChildProcess} proc
+     * @param {string} signal
+     * @private
+     */
+    _killProcess(proc, signal = 'SIGKILL') {
+        try {
+            if (proc && !proc.killed) {
+                proc.kill(signal);
+            }
+        } catch {}
+    }
+
+    /**
+     * Kill all active yt-dlp child processes.
+     * Called during stream teardown and bot shutdown.
+     */
+    cleanupAll() {
+        for (const proc of this.activeProcesses) {
+            this._killProcess(proc, 'SIGKILL');
+        }
+        this.activeProcesses.clear();
     }
 }
 

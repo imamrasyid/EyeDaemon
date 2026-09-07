@@ -36,6 +36,9 @@ class MusicPlayerService extends BaseService {
 
         // In-memory cache for guild volume defaults to avoid DB read on every track
         this._volumeDefaults = new Map();
+
+        // Generation counter per guild to prevent double startPlayback() from Idle+Error race
+        this._playbackGeneration = new Map();
     }
 
     /**
@@ -172,6 +175,10 @@ class MusicPlayerService extends BaseService {
                 return;
             }
 
+            // Increment generation to invalidate any stale Idle/error handlers from previous tracks
+            const gen = (this._playbackGeneration.get(guildId) || 0) + 1;
+            this._playbackGeneration.set(guildId, gen);
+
             this.log(`Starting playback for track: ${track.title}`, 'info');
 
             // Get current filter
@@ -226,6 +233,8 @@ class MusicPlayerService extends BaseService {
 
             // Handle track end
             player.once(AudioPlayerStatus.Idle, () => {
+                // Guard: skip if this handler is stale (a newer startPlayback already ran)
+                if (this._playbackGeneration.get(guildId) !== gen) return;
                 this.log(`Track finished, playing next track`, 'info');
                 this.playbackStates.delete(guildId);
                 this._prefetchCache.delete(guildId);
@@ -234,6 +243,8 @@ class MusicPlayerService extends BaseService {
 
             // Handle errors
             player.once('error', (error) => {
+                // Guard: skip if this handler is stale
+                if (this._playbackGeneration.get(guildId) !== gen) return;
                 this.log(`Player error: ${error.message}`, 'error');
                 this.playbackStates.delete(guildId);
                 this._prefetchCache.delete(guildId);
@@ -259,6 +270,9 @@ class MusicPlayerService extends BaseService {
             this._prefetchNext(guildId);
         } catch (error) {
             this.handleError(error, 'startPlayback');
+
+            // Invalidate generation to stop any stale handlers
+            this._playbackGeneration.delete(guildId);
 
             // Try to play next track on error
             const hasMoreTracks = this.queueManager.getSize(guildId) > 0;
@@ -344,6 +358,8 @@ class MusicPlayerService extends BaseService {
             player.removeAllListeners(AudioPlayerStatus.Idle);
             player.removeAllListeners('error');
         }
+        // Invalidate any in-flight startPlayback() handlers
+        this._playbackGeneration.delete(guildId);
         this.queueManager.clear(guildId);
         this.audioPlayer.stop(guildId);
         this.voiceManager.leave(guildId);

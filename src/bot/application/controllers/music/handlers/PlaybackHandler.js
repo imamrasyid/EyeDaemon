@@ -4,7 +4,7 @@
  * Handles music playback commands: play, pause, resume, skip, stop
  */
 
-const { replyEphemeral } = require('../../../../system/helpers/InteractionHelper');
+const { replyEphemeral, isInteractionExpired } = require('../../../../system/helpers/InteractionHelper');
 
 class PlaybackHandler {
     constructor(controller) {
@@ -41,13 +41,30 @@ class PlaybackHandler {
             const embed = this.controller.createQueuedEmbed(result.track, result.position);
             await interaction.editReply({ embeds: [embed] });
         } catch (error) {
+            // Skip if interaction already expired — cannot respond
+            if (isInteractionExpired(interaction)) {
+                this.controller.log(`Error in play command (interaction expired): ${error.message}`, 'warn');
+                return;
+            }
+
             this.controller.log(`Error in play command: ${error.message}`, 'error');
-            const errorMsg = error.message || 'Failed to play track';
 
             if (interaction.deferred || interaction.replied) {
-                await interaction.editReply({ content: `❌ ${errorMsg}` });
+                try {
+                    await interaction.editReply({ content: `❌ ${error.message || 'Failed to play track'}` });
+                } catch (replyError) {
+                    if (replyError.code !== 10062 && replyError.code !== 50013) {
+                        this.controller.log(`Failed to send error reply: ${replyError.message}`, 'error');
+                    }
+                }
             } else {
-                await replyEphemeral(interaction, `❌ ${errorMsg}`);
+                try {
+                    await replyEphemeral(interaction, `❌ ${error.message || 'Failed to play track'}`);
+                } catch (replyError) {
+                    if (replyError.code !== 10062 && replyError.code !== 50013) {
+                        this.controller.log(`Failed to send error reply: ${replyError.message}`, 'error');
+                    }
+                }
             }
         }
     }

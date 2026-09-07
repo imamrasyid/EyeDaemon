@@ -99,19 +99,10 @@ class GuildInitializationService extends BaseService {
         const db = this.getDatabase();
         if (!db) throw new Error('Database connection not available');
 
-        const defaultConfig = {
-            prefix: '!',
-            dj_role: null,
-            volume_default: 80,
-            max_queue_size: 100,
-            welcome_enabled: false,
-            welcome_channel: null,
-            welcome_message: 'Welcome {user} to {server}!',
-            auto_role: null,
-            moderation_log_channel: null,
-            leveling_xp_multiplier: 1.0,
-            economy_starting_balance: 1000,
-        };
+        let defaultConfig = {};
+        if (this.guildConfigService && typeof this.guildConfigService.getDefaults === 'function') {
+            defaultConfig = this.guildConfigService.getDefaults();
+        }
 
         const configJson = JSON.stringify(defaultConfig);
         const now = Math.floor(Date.now() / 1000);
@@ -123,7 +114,7 @@ class GuildInitializationService extends BaseService {
                 name = excluded.name,
                 config_json = excluded.config_json,
                 updated_at = excluded.updated_at`,
-            [guild.id, guild.name, configJson, '!', now, now]
+            [guild.id, guild.name, configJson, defaultConfig.prefix || '!', now, now]
         );
 
         this.log(`Saved guild data for ${guild.id}`, 'debug');

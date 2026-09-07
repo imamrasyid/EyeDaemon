@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * PerformanceHandler
  * 
@@ -18,6 +20,14 @@ class PerformanceHandler {
      */
     async performance(interaction) {
         try {
+            if (!interaction.member.permissions.has('Administrator')) {
+                return await this.controller.sendError(
+                    interaction,
+                    'You need **Administrator** permission to use this command.',
+                    true
+                );
+            }
+
             await interaction.deferReply();
 
             if (!this.controller.performanceService) {
@@ -40,16 +50,38 @@ class PerformanceHandler {
                 `**Channels:** \`${metrics.bot.channels.total}\` (\`${metrics.bot.channels.text}\` text, \`${metrics.bot.channels.voice}\` voice)`,
                 `**Commands:** \`${metrics.bot.commands.total}\` (\`${metrics.bot.commands.modules}\` modules)`,
                 `**WebSocket Ping:** \`${metrics.bot.connection.ping}ms\``,
-                `**Process Uptime:** \`${metrics.bot.uptime}\``,
+                `**Process Uptime:** \`${metrics.bot.connection.uptime}\``,
             ].join('\n');
+
+            const fields = [
+                { name: '💻 Host & Node.js System', value: systemValue, inline: false },
+                { name: '🤖 Bot & Discord Gateway', value: botValue, inline: false },
+            ];
+
+            if (metrics.database && metrics.database.available) {
+                const dbValue = [
+                    `**Type:** \`${metrics.database.connection.type}\``,
+                    `**Status:** \`${metrics.database.connection.status}\``,
+                    `**Size:** \`${metrics.database.statistics.size}\``,
+                    `**Tables:** \`${metrics.database.statistics.tables}\``,
+                    `**Total Rows:** \`${metrics.database.statistics.totalRows}\``,
+                ].join('\n');
+                fields.push({ name: '🗄️ Database', value: dbValue, inline: false });
+            }
+
+            if (metrics.cache) {
+                const cacheValue = [
+                    `**Hit Rate:** \`${metrics.cache.total.hitRate}\``,
+                    `**Hits:** \`${metrics.cache.total.hits}\` / **Misses:** \`${metrics.cache.total.misses}\``,
+                    `**Cached Entries:** \`${metrics.cache.total.size}\``,
+                ].join('\n');
+                fields.push({ name: '📦 Cache', value: cacheValue, inline: false });
+            }
 
             const embed = ResponseHelper.createEmbed({
                 color: ResponseHelper.THEMES.ADMIN,
                 title: '📈 System & Runtime Performance Dashboard',
-                fields: [
-                    { name: '💻 Host & Node.js System', value: systemValue, inline: false },
-                    { name: '🤖 Bot & Discord Gateway', value: botValue, inline: false },
-                ],
+                fields,
                 footerText: 'EyeDaemon Live Diagnostics',
             });
 
@@ -58,7 +90,9 @@ class PerformanceHandler {
             this.controller.log(`Error in performance command: ${error.message}`, 'error', {
                 stack: error.stack,
             });
-            await this.controller.safeReplyError(interaction, 'Failed to fetch performance metrics');
+            if (!interaction.deferred && !interaction.replied) {
+                await this.controller.safeReplyError(interaction, 'Failed to fetch performance metrics');
+            }
         }
     }
 }

@@ -1,12 +1,15 @@
 /**
  * PerformanceService
- * 
+ *
  * Service for collecting and reporting performance metrics.
  * Provides system, bot, database, and cache metrics for monitoring.
  */
 
 const BaseService = require('../../../../system/core/BaseService');
+const { ChannelType } = require('discord.js');
 const os = require('os');
+
+const VALID_TABLE_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 class PerformanceService extends BaseService {
     /**
@@ -16,14 +19,14 @@ class PerformanceService extends BaseService {
      */
     constructor(client, options = {}) {
         super(client, options);
+        this._previousCpuUsage = null;
+        this._previousCpuTimestamp = null;
     }
 
-    /**
-     * Initialize service
-     * @returns {Promise<void>}
-     */
     async initialize() {
         await super.initialize();
+        this._previousCpuUsage = process.cpuUsage();
+        this._previousCpuTimestamp = Date.now();
         this.log('PerformanceService initialized', 'info');
     }
 
@@ -34,15 +37,27 @@ class PerformanceService extends BaseService {
     getSystemMetrics() {
         try {
             const memoryUsage = process.memoryUsage();
-            const cpuUsage = process.cpuUsage();
             const uptime = process.uptime();
 
-            // Calculate CPU usage percentage
-            const totalCPU = cpuUsage.user + cpuUsage.system;
-            const cpuPercent = (totalCPU / (uptime * 1000000) * 100).toFixed(2);
+            const currentCpu = process.cpuUsage();
+            const now = Date.now();
+            let cpuPercent = '0.00';
+
+            if (this._previousCpuUsage && this._previousCpuTimestamp) {
+                const userDelta = currentCpu.user - this._previousCpuUsage.user;
+                const systemDelta = currentCpu.system - this._previousCpuUsage.system;
+                const timeDeltaMs = now - this._previousCpuTimestamp;
+                const timeDeltaUs = timeDeltaMs * 1000;
+
+                if (timeDeltaUs > 0) {
+                    cpuPercent = ((userDelta + systemDelta) / timeDeltaUs * 100).toFixed(2);
+                }
+            }
+
+            this._previousCpuUsage = currentCpu;
+            this._previousCpuTimestamp = now;
 
             return {
-                // Memory metrics
                 memory: {
                     heapUsed: this.formatBytes(memoryUsage.heapUsed),
                     heapTotal: this.formatBytes(memoryUsage.heapTotal),
@@ -52,15 +67,13 @@ class PerformanceService extends BaseService {
                     heapTotalRaw: memoryUsage.heapTotal,
                     heapUsagePercent: ((memoryUsage.heapUsed / memoryUsage.heapTotal) * 100).toFixed(2),
                 },
-                // CPU metrics
                 cpu: {
                     usage: `${cpuPercent}%`,
-                    user: cpuUsage.user,
-                    system: cpuUsage.system,
+                    user: currentCpu.user,
+                    system: currentCpu.system,
                     cores: os.cpus().length,
                     model: os.cpus()[0]?.model || 'Unknown',
                 },
-                // System info
                 system: {
                     platform: os.platform(),
                     arch: os.arch(),
@@ -86,7 +99,6 @@ class PerformanceService extends BaseService {
         try {
             const client = this.client;
 
-            // Calculate total members across all guilds
             let totalMembers = 0;
             let totalTextChannels = 0;
             let totalVoiceChannels = 0;
@@ -95,57 +107,47 @@ class PerformanceService extends BaseService {
                 totalMembers += guild.memberCount || 0;
 
                 for (const channel of guild.channels.cache.values()) {
-                    if (channel.type === 0) { // GUILD_TEXT
+                    if (channel.type === ChannelType.GuildText) {
                         totalTextChannels++;
-                    } else if (channel.type === 2) { // GUILD_VOICE
+                    } else if (channel.type === ChannelType.GuildVoice) {
                         totalVoiceChannels++;
                     }
                 }
             }
 
-            // Get command count
             const commandCount = client.commands ? client.commands.size : 0;
-
-            // Get module count
             const moduleCount = client.modules ? client.modules.size : 0;
 
-            // Get shard info if sharded
             const shardInfo = client.shard ? {
                 id: client.shard.ids[0],
                 count: client.shard.count,
             } : null;
 
             return {
-                // Guild metrics
                 guilds: {
                     total: client.guilds.cache.size,
                     available: client.guilds.cache.filter(g => g.available).size,
                     unavailable: client.guilds.cache.filter(g => !g.available).size,
                 },
-                // User metrics
                 users: {
                     cached: client.users.cache.size,
                     totalMembers: totalMembers,
                 },
-                // Channel metrics
                 channels: {
                     total: client.channels.cache.size,
                     text: totalTextChannels,
                     voice: totalVoiceChannels,
                 },
-                // Command metrics
                 commands: {
                     total: commandCount,
                     modules: moduleCount,
                 },
-                // Connection metrics
                 connection: {
                     ping: client.ws.ping,
                     status: client.ws.status,
                     uptime: this.formatUptime(client.uptime / 1000),
                     uptimeMs: client.uptime,
                 },
-                // Shard info (if applicable)
                 shard: shardInfo,
             };
         } catch (error) {
@@ -155,7 +157,7 @@ class PerformanceService extends BaseService {
     }
 
     /**
-     * Get database metrics (query stats, connection info)
+     * Get database metrics (size, tables, row counts)
      * @returns {Promise<Object>} Database metrics
      */
     async getDatabaseMetrics() {
@@ -169,29 +171,43 @@ class PerformanceService extends BaseService {
                 };
             }
 
-            // Get database file size (if SQLite)
             let dbSize = 'N/A';
             let tableCount = 0;
             let totalRows = 0;
+            let connectionType = 'Unknown';
 
             try {
-                // Get table count
+                const dbUrl = this.client?.options?.db?.url
+                    || this.client?.database?.config?.url
+                    || '';
+
+                if (dbUrl.startsWith('libsql://') || dbUrl.startsWith('https://')) {
+                    connectionType = 'Turso (Remote)';
+                } else if (dbUrl.startsWith('file:')) {
+                    connectionType = 'SQLite (Local)';
+                } else {
+                    connectionType = 'SQLite';
+                }
+
                 const tables = await db.query(
                     "SELECT COUNT(*) as count FROM sqlite_master WHERE type='table'"
                 );
                 tableCount = tables[0]?.count || 0;
 
-                // Get total row count across all tables
                 const tableNames = await db.query(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
                 );
 
                 for (const table of tableNames) {
-                    const rowCount = await db.query(`SELECT COUNT(*) as count FROM ${table.name}`);
+                    if (!VALID_TABLE_NAME.test(table.name)) {
+                        this.log(`Skipping invalid table name: ${table.name}`, 'warn');
+                        continue;
+                    }
+
+                    const rowCount = await db.query(`SELECT COUNT(*) as count FROM "${table.name}"`);
                     totalRows += rowCount[0]?.count || 0;
                 }
 
-                // Get database page count and page size to calculate size
                 const pageCount = await db.query('PRAGMA page_count');
                 const pageSize = await db.query('PRAGMA page_size');
 
@@ -206,7 +222,7 @@ class PerformanceService extends BaseService {
             return {
                 available: true,
                 connection: {
-                    type: 'SQLite',
+                    type: connectionType,
                     status: 'Connected',
                 },
                 statistics: {
@@ -214,7 +230,6 @@ class PerformanceService extends BaseService {
                     tables: tableCount,
                     totalRows: totalRows,
                 },
-                // Query statistics (if available from db object)
                 queries: db.stats || {
                     total: 'N/A',
                     successful: 'N/A',
@@ -246,7 +261,6 @@ class PerformanceService extends BaseService {
                 },
             };
 
-            // Get GuildConfigService cache stats
             const guildConfigService = this.client.services.get('GuildConfigService');
             if (guildConfigService && typeof guildConfigService.getCacheStats === 'function') {
                 const stats = guildConfigService.getCacheStats();
@@ -257,16 +271,14 @@ class PerformanceService extends BaseService {
                 cacheMetrics.total.size += stats.size;
             }
 
-            // Get cache stats from other services if they implement getCacheStats
             for (const [serviceName, service] of this.client.services.entries()) {
-                if (serviceName === 'GuildConfigService') continue; // Already added
+                if (serviceName === 'GuildConfigService') continue;
 
                 if (service && typeof service.getCacheStats === 'function') {
                     try {
                         const stats = service.getCacheStats();
                         cacheMetrics.services[serviceName] = stats;
 
-                        // Parse hits and misses if they're numbers
                         const hits = typeof stats.hits === 'number' ? stats.hits : 0;
                         const misses = typeof stats.misses === 'number' ? stats.misses : 0;
                         const size = typeof stats.size === 'number' ? stats.size : 0;
@@ -280,7 +292,6 @@ class PerformanceService extends BaseService {
                 }
             }
 
-            // Calculate total hit rate
             const totalRequests = cacheMetrics.total.hits + cacheMetrics.total.misses;
             if (totalRequests > 0) {
                 const hitRate = (cacheMetrics.total.hits / totalRequests * 100).toFixed(2);
@@ -300,17 +311,15 @@ class PerformanceService extends BaseService {
      */
     async getAllMetrics() {
         try {
-            const [systemMetrics, botMetrics, databaseMetrics, cacheMetrics] = await Promise.all([
-                Promise.resolve(this.getSystemMetrics()),
-                Promise.resolve(this.getBotMetrics()),
+            const [databaseMetrics, cacheMetrics] = await Promise.all([
                 this.getDatabaseMetrics(),
                 Promise.resolve(this.getCacheMetrics()),
             ]);
 
             return {
                 timestamp: new Date().toISOString(),
-                system: systemMetrics,
-                bot: botMetrics,
+                system: this.getSystemMetrics(),
+                bot: this.getBotMetrics(),
                 database: databaseMetrics,
                 cache: cacheMetrics,
             };

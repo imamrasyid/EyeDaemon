@@ -229,11 +229,17 @@ class InteractionCreateEvent extends BaseEvent {
      */
     async sendErrorResponse(interaction) {
         try {
+            const creationTime = interaction.createdTimestamp;
+            const now = Date.now();
+            if ((now - creationTime) > 14 * 60 * 1000) return;
+
             await replyEphemeral(interaction, '❌ An error occurred while executing this command');
         } catch (replyError) {
-            this.log('Failed to send error message', 'error', {
-                error: replyError.message,
-            });
+            if (replyError.code !== 10062 && replyError.code !== 50013) {
+                this.log('Failed to send error message', 'error', {
+                    error: replyError.message,
+                });
+            }
         }
     }
 
